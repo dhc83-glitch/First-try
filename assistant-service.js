@@ -3,7 +3,13 @@ import {readCentral,auditCentral,changesSince,buildPlan} from './assistant.js';
 import {localParts} from './audit.js';
 import {gmailFailureDetail} from './gmail.js';
 
-const pendingSources=()=>['Personal inbox','School inbox','Professional inbox','External calendar'].map(name=>({name,status:'not connected',detail:'Not checked. A separate app connection is required; ChatGPT connections are not inherited.'}));
+const pendingSources=(state,continuing)=>[
+  ...['personal','school','professional'].map(slot=>{
+    const scan=state.mailScans?.[slot],complete=continuing&&scan?.complete;
+    return {name:slot[0].toUpperCase()+slot.slice(1)+' inbox',status:complete?'checked':'waiting',count:state.mailRecords?.[slot]?.length,detail:complete?'This inbox finished earlier in this catch-up.':'Waiting for the current batch result; this does not mean the connection is missing.'};
+  }),
+  {name:'External calendar (optional)',status:'not connected',optional:true,detail:'Only commitments stored in Central Tasks are checked.'}
+];
 export class Assistant {
   constructor({notion,store,sourceId,gmail,clock=()=>new Date()}){Object.assign(this,{notion,store,sourceId,gmail,clock});this.busy=false;}
   async state(){const s=await this.store.read();return {latest:s.latest,history:s.history,operations:s.operations||[],configured:!!this.notion};}
@@ -13,14 +19,14 @@ export class Assistant {
     let state,run;
     try {
       state=await this.store.read();const now=this.clock();
-      run={id:randomUUID(),startedAt:now.toISOString(),status:'running',sources:[{name:'Central Tasks',status:'checking'},...pendingSources()]};
+      run={id:randomUUID(),startedAt:now.toISOString(),status:'running',sources:[{name:'Central Tasks',status:'checking'},...pendingSources(state,continueCatchup)]};
       state.latest=run;await this.store.write(state);
       if(!this.notion)throw new Error('Notion is not connected to this app.');
       const slots=['personal','school','professional'];
       state.mailRecords||={};state.mailScans||={};let checkpoint=Promise.resolve();
       const saveProgress=(slot,messages,scan)=>{
         state.mailRecords[slot]=structuredClone(messages);if(scan)state.mailScans[slot]=structuredClone(scan);
-        run.sources[slots.indexOf(slot)+1]={name:slot[0].toUpperCase()+slot.slice(1)+' inbox',status:scan?.complete?'checked':'reading',count:messages.length,detail:scan?.detail||'Progress saved; catch-up is continuing.'};
+        run.sources[slots.indexOf(slot)+1]={name:slot[0].toUpperCase()+slot.slice(1)+' inbox',status:scan?.complete?'checked':scan?.paused?'incomplete':'reading',count:messages.length,detail:scan?.complete||scan?.paused?scan.detail:'Progress saved; catch-up is continuing through the remaining inbox pages.'};
         const snapshot=structuredClone(state);
         checkpoint=checkpoint.then(()=>this.store.write(snapshot));return checkpoint;
       };

@@ -94,3 +94,18 @@ test('mail checkpoints persist even when a scan fails afterward',async t=>{
  }}});
  const next=await restarted.refresh();assert.equal(next.inboxReview.length,1);
 });
+test('live catch-up keeps a finished inbox checked and does not label waiting sources disconnected',async t=>{
+ const store=await fixture(t),state=await store.read();
+ const record={id:'m1',email:'work@example.com'};state.mailRecords={professional:[record]};state.mailScans={professional:{complete:true}};await store.write(state);
+ let release,observed;const gate=new Promise(r=>release=r),ready=new Promise(r=>observed=r);
+ const service=new Assistant({store,sourceId,clock:()=>now,notion:{source:async()=>schema,all:async()=>[page()]},gmail:{readInbox:async(slot,records,checkpoint)=>{
+   if(slot==='personal'){await checkpoint([record],{complete:false,detail:'Old count: 0'});observed();await gate;}
+   return {status:'checked',messages:records,count:records.length};
+ }}});
+ const run=service.refresh({continueCatchup:true});await ready;
+ const live=(await store.read()).latest;
+ assert.equal(live.sources.find(s=>s.name==='Professional inbox').status,'checked');
+ assert.equal(live.sources.find(s=>s.name==='School inbox').status,'waiting');
+ assert.ok(!live.sources.find(s=>s.name==='Personal inbox').detail.includes('Old count'));
+ release();await run;
+});

@@ -37,7 +37,10 @@ export function createApp({token=process.env.NOTION_TOKEN, databaseId=process.en
         if(path==='/api/gmail/status')return json(res,200,await gmail.status());
         if(path==='/api/gmail/connect')return json(res,200,{url:gmail.begin(data.slot,`http://${host}`)});
         if(!notion)return json(res,503,{error:'Set NOTION_TOKEN in the server environment, then restart. Never enter a token in chat.'});
-        if(path==='/api/assistant/state')return json(res,200,{...await assistant.state(),job:job.current});
+        if(path==='/api/assistant/state'){
+          const currentJob=job.current?{...job.current}:null;
+          return json(res,200,{...await assistant.state(),job:currentJob});
+        }
         if(path==='/api/assistant/start'){if(busy)throw new Error('A Notion update is running.');return json(res,202,{job:job.start()});}
         if(path==='/api/assistant/stop')return json(res,200,job.stop());
         if(job.running&&['/api/assistant/refresh','/api/assistant/approve','/api/assistant/mail-review','/api/audit','/api/update'].includes(path))throw new Error('Catch-up is running. Stop it and wait for the current batch before reviewing changes.');

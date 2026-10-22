@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {readCentral,auditCentral,changesSince,buildPlan} from './assistant.js';
 import {localParts} from './audit.js';
+import {gmailFailureDetail} from './gmail.js';
 
 const pendingSources=()=>['Personal inbox','School inbox','Professional inbox','External calendar'].map(name=>({name,status:'not connected',detail:'Not checked. A separate app connection is required; ChatGPT connections are not inherited.'}));
 export class Assistant {
@@ -20,7 +21,7 @@ export class Assistant {
       state.mailRecords||={};const mailSources=[];
       for(let i=0;i<slots.length;i++){
         const read=reads[i+1],slot=slots[i],name=slot[0].toUpperCase()+slot.slice(1)+' inbox';
-        if(read.status==='rejected'){mailSources.push({name,status:'failed',detail:'Gmail could not be fully read. Reconnect or try again; previous records were kept.'});continue;}
+        if(read.status==='rejected'){mailSources.push({name,status:'failed',detail:gmailFailureDetail(read.reason)});continue;}
         const inbox=read.value;
         mailSources.push({name,status:inbox.status,count:inbox.count,detail:inbox.detail||'Not checked. Connect this Gmail account in the app.'});
         if(['checked','incomplete'].includes(inbox.status))state.mailRecords[slot]=inbox.messages;

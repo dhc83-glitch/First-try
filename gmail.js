@@ -6,9 +6,28 @@ const GOOGLE_AUTH='https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN='https://oauth2.googleapis.com/token';
 const GMAIL='https://gmail.googleapis.com/gmail/v1/users/me';
 const scope='https://www.googleapis.com/auth/gmail.readonly';
+const knownReasons=new Set(['invalid_grant','invalid_client','insufficientPermissions','ACCESS_TOKEN_SCOPE_INSUFFICIENT','accessNotConfigured','SERVICE_DISABLED','rateLimitExceeded','userRateLimitExceeded','RESOURCE_EXHAUSTED','domainPolicy','authError','notFound','invalidArgument','backendError','PERMISSION_DENIED','UNAUTHENTICATED']);
+export function gmailFailureDetail(error){
+  if(error?.gmailDiagnostic)return error.gmailDiagnostic;
+  if(['TimeoutError','AbortError'].includes(error?.name))return 'Gmail request timed out. Try Refresh again. Saved inbox records were kept.';
+  return 'The Gmail reader encountered an unexpected error. A local diagnostic is needed; saved inbox records were kept.';
+}
+async function googleFailure(response,stage){
+  const data=await response.json().catch(()=>({}));
+  const codes=[typeof data.error==='string'?data.error:null,data.error?.status,...(data.error?.errors||[]).map(e=>e.reason),...(data.error?.details||[]).map(e=>e.reason)].filter(c=>knownReasons.has(c));
+  let advice='Try Refresh again. If this persists, report this error code.';
+  if(codes.some(c=>['invalid_grant','UNAUTHENTICATED','authError'].includes(c))||response.status===401)advice='The Google permission expired or was revoked. Reconnect this inbox.';
+  if(codes.includes('invalid_client'))advice='Check the Google Client ID and Client Secret in the private .env file, then restart the app.';
+  if(codes.some(c=>['insufficientPermissions','ACCESS_TOKEN_SCOPE_INSUFFICIENT'].includes(c)))advice='Reconnect this inbox and grant the read-only Gmail permission.';
+  if(codes.some(c=>['SERVICE_DISABLED','accessNotConfigured'].includes(c)))advice='Enable Gmail API in the Google Cloud project that owns this Client ID.';
+  if(response.status===429||codes.some(c=>['rateLimitExceeded','userRateLimitExceeded','RESOURCE_EXHAUSTED'].includes(c)))advice='Google limited the request rate. Wait a minute, then Refresh again.';
+  if(codes.includes('domainPolicy'))advice='Your school or work administrator must allow this app.';
+  const diagnostic=`${stage}: Google HTTP ${response.status}${codes.length?' ('+[...new Set(codes)].join(', ')+')':''}. ${advice} Saved records were kept.`;
+  const error=new Error(diagnostic);error.gmailDiagnostic=diagnostic;error.httpStatus=response.status;return error;
+}
 const decode=s=>Buffer.from(s||'','base64url').toString('utf8');
 export function messageRecord(message,slot,email){
-  const headers=Object.fromEntries((message.payload?.headers||[]).map(h=>[h.name.toLowerCase(),h.value]));
+  const headers=Object.fromEntries((message.payload?.headers||[]).filter(h=>typeof h.name==='string').map(h=>[h.name.toLowerCase(),h.value]));
   function content(part){if(part.mimeType==='text/plain'&&part.body?.data)return decode(part.body.data);return (part.parts||[]).map(content).filter(Boolean).join('\n');}
   const text=content(message.payload||{});
   const newsletter=!!headers['list-unsubscribe'];
@@ -32,7 +51,7 @@ export class Gmail {
     const params=new URLSearchParams({client_id:this.clientId,redirect_uri:redirect,response_type:'code',scope,access_type:'offline',prompt:'consent select_account',state,code_challenge:createHash('sha256').update(verifier).digest('base64url'),code_challenge_method:'S256'});
     return GOOGLE_AUTH+'?'+params;
   }
-  async token(body){const r=await this.fetcher(TOKEN,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({...body,client_id:this.clientId,client_secret:this.clientSecret}),signal:AbortSignal.timeout(30000)});if(!r.ok)throw new Error('Google authorization failed. Reconnect this inbox; no email was changed.');return r.json();}
+  async token(body){const r=await this.fetcher(TOKEN,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({...body,client_id:this.clientId,client_secret:this.clientSecret}),signal:AbortSignal.timeout(30000)});if(!r.ok)throw await googleFailure(r,'Google sign-in');return r.json();}
   async finish(state,code){
     const pending=this.pending.get(state);this.pending.delete(state);
     if(!pending||pending.expires<Date.now()||!code)throw new Error('Sign-in expired or was canceled. Start Connect Gmail again.');
@@ -52,7 +71,7 @@ export class Gmail {
     for(let attempt=0;attempt<3;attempt++){
       const r=await this.fetcher(GMAIL+path,{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(30000)});
       if((r.status===429||r.status>=500)&&attempt<2){await new Promise(resolve=>setTimeout(resolve,(attempt+1)*1000));continue;}
-      if(!r.ok)throw new Error(`Gmail read failed (HTTP ${r.status}). Check this account's connection. Nothing was changed.`);
+      if(!r.ok)throw await googleFailure(r,path.startsWith('/messages?')?'Listing inbox':path.startsWith('/messages/')?'Reading email':'Checking account');
       return r.json();
     }
   }

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {Gmail,messageRecord} from '../gmail.js';
+import {Gmail,messageRecord,gmailFailureDetail} from '../gmail.js';
 const vault=accounts=>{let data={version:1,history:[],accounts};return {read:async()=>structuredClone(data),write:async v=>{data=structuredClone(v);}};};
 const raw=(id='m1')=>({id,internalDate:'1792670400000',snippet:'Review the assignment',payload:{mimeType:'multipart/alternative',headers:[{name:'Subject',value:'Assignment update'},{name:'From',value:'teacher@example.com'}],parts:[{mimeType:'text/plain',body:{data:Buffer.from('Read the updated instructions.').toString('base64url')}}]}});
 test('Gmail uses state and PKCE, readonly permission, and never returns tokens to the UI',async()=>{
@@ -38,4 +38,14 @@ test('pagination cap reports incomplete instead of claiming every email was chec
 test('email text is data; newsletter and missing body are explicit',()=>{
  const m=raw();m.payload.headers.push({name:'List-Unsubscribe',value:'https://example.com'});m.payload.parts=[];
  const r=messageRecord(m,'personal','me@example.com');assert.equal(r.category,'Newsletter');assert.equal(r.bodyUnavailable,true);assert.equal(r.key,'gmail:me@example.com:m1');
+});
+test('Gmail failures show phase and safe Google codes without leaking response content',async()=>{
+ const gmail=new Gmail({vault:vault({}),fetcher:async()=>Response.json({error:{status:'PERMISSION_DENIED',message:'private-response-content',details:[{reason:'SERVICE_DISABLED',metadata:{private:'do not show'}}]}},{status:403})});
+ await assert.rejects(()=>gmail.get('/messages?maxResults=1','private-access-token'),e=>{
+  const text=gmailFailureDetail(e);assert.match(text,/Listing inbox.*403.*SERVICE_DISABLED/);assert.match(text,/Enable Gmail API/);assert.ok(!text.includes('private'));return true;
+ });
+});
+test('expired refresh permissions identify sign-in without exposing tokens',async()=>{
+ const gmail=new Gmail({vault:vault({}),fetcher:async()=>Response.json({error:'invalid_grant',error_description:'private details'},{status:400})});
+ await assert.rejects(()=>gmail.token({refresh_token:'private-token'}),e=>{assert.match(gmailFailureDetail(e),/Google sign-in.*invalid_grant/);assert.ok(!e.message.includes('private'));return true;});
 });

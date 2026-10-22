@@ -17,3 +17,7 @@ test('quota or missing permissions pause instead of creating an endless retry lo
 test('background exceptions are captured and the user can start again',async()=>{
  const job=new RefreshJob({refresh:async()=>{throw Error('failure');}});job.start();await job.done;assert.equal(job.current.status,'failed');assert.ok(job.current.error);job.start();await job.done;assert.equal(job.current.status,'failed');
 });
+test('completed source reads do not conceal a failed Home update or unfinished reconciliation',async()=>{
+ const job=new RefreshJob({refresh:async()=>({status:'complete',sources:[]}),applyAutomatic:async()=>({homeUpdated:false,exceptions:[{reason:'Home timed out'}]})});
+ job.start();await job.done;assert.equal(job.current.status,'needs attention');assert.equal(job.current.automatic.homeUpdated,false);
+});

@@ -34,5 +34,5 @@ test('HTTP start catches up in background, exposes status, and performs no Notio
  const post=async route=>fetch(base+'/api/'+route,{method:'POST',headers:{'Content-Type':'application/json','X-Auditor-Token':config.csrf},body:'{}'});
  assert.equal((await post('assistant/start')).status,202);
  let state;for(let i=0;i<50;i++){state=await(await post('assistant/state')).json();if(state.job?.status!=='running')break;await new Promise(r=>setTimeout(r,10));}
- assert.equal(state.job.status,'complete');assert.equal(state.job.rounds,2);assert.equal(state.latest.status,'complete');assert.equal(state.latest.inboxReview.length,3);assert.equal(writes,0);
+ assert.equal(state.job.status,'needs attention');assert.equal(state.job.rounds,2);assert.equal(state.latest.status,'complete');assert.equal(state.latest.inboxReview.length,3);assert.equal(writes,0);
 });

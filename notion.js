@@ -1,10 +1,20 @@
 const API='https://api.notion.com/v1';
 export class Notion {
-  constructor(token, fetcher=fetch){this.token=token;this.fetcher=fetcher;}
+  constructor(token, fetcher=fetch, {sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms)),readTimeoutMs=15000,writeTimeoutMs=30000}={}){Object.assign(this,{token,fetcher,sleep,readTimeoutMs,writeTimeoutMs});}
   async call(path,method='GET',body){
-    for(let attempt=0;attempt<4;attempt++){
-      const res=await this.fetcher(API+path,{method,headers:{Authorization:`Bearer ${this.token}`,'Notion-Version':'2025-09-03','Content-Type':'application/json'},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(30000)});
-      if(res.status===429&&attempt<3){await new Promise(r=>setTimeout(r,Math.min(10,Number(res.headers.get('retry-after'))||1)*1000));continue;}
+    // Notion search and data-source queries use POST but are read-only.
+    const readOnly=method==='GET'||(method==='POST'&&(path==='/search'||/^\/data_sources\/[^/]+\/query$/.test(path)));
+    for(let attempt=0;attempt<3;attempt++){
+      let res;
+      try{
+        res=await this.fetcher(API+path,{method,headers:{Authorization:`Bearer ${this.token}`,'Notion-Version':'2025-09-03','Content-Type':'application/json'},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(readOnly?this.readTimeoutMs:this.writeTimeoutMs)});
+      }catch(error){
+        if(readOnly&&attempt<2&&['TimeoutError','AbortError','TypeError'].includes(error.name)){await this.sleep(500*2**attempt);continue;}
+        if(['TimeoutError','AbortError'].includes(error.name))throw new Error(readOnly?'Notion took too long to respond after bounded read retries. Saved progress was kept.':'Notion did not confirm this write before the timeout. Its outcome must be verified before retrying.');
+        throw error;
+      }
+      if(res.status===429&&attempt<2){await this.sleep(Math.min(10,Number(res.headers.get('retry-after'))||1)*1000);continue;}
+      if(readOnly&&res.status>=500&&res.status<=599&&attempt<2){await this.sleep(500*2**attempt);continue;}
       const data=await res.json();
       if(!res.ok) throw new Error(`Notion ${res.status}: ${data.message||'Request failed'}`);
       return data;

@@ -80,3 +80,17 @@ test('approved email task creation uses a source key and cannot duplicate a prio
  const next=await store.read();next.latest.inboxReview=[message];next.mailDecisions={};await store.write(next);existing=true;
  assert.deepEqual(await service.reviewMail({key:message.key,decision:'create',title:'Homework',confirmed:true}),{alreadyLinked:true});assert.equal(creates,1);
 });
+test('mail checkpoints persist even when a scan fails afterward',async t=>{
+ const store=await fixture(t);let saved;
+ const record={id:'m1',key:'gmail:me@example.com:m1',email:'me@example.com'};
+ const service=new Assistant({store,sourceId,clock:()=>now,notion:{source:async()=>schema,all:async()=>[page()]},gmail:{readInbox:async(slot,previous,checkpoint)=>{
+   if(slot==='personal'){saved=previous;await checkpoint([record]);throw Error('interrupted');}
+   return {status:'not connected',messages:[]};
+ }}});
+ await service.refresh();assert.equal(saved.length,0);assert.deepEqual((await store.read()).mailRecords.personal,[record]);
+ const restarted=new Assistant({store,sourceId,clock:()=>now,notion:{source:async()=>schema,all:async()=>[page()]},gmail:{readInbox:async(slot,previous)=>{
+   if(slot==='personal'){assert.deepEqual(previous,[record]);return {status:'checked',messages:previous,count:1};}
+   return {status:'not connected',messages:[]};
+ }}});
+ const next=await restarted.refresh();assert.equal(next.inboxReview.length,1);
+});

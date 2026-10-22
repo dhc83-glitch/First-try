@@ -17,7 +17,13 @@ export class Assistant {
       state.latest=run;await this.store.write(state);
       if(!this.notion)throw new Error('Notion is not connected to this app.');
       const slots=['personal','school','professional'];
-      const reads=await Promise.allSettled([readCentral(this.notion,state.sourceId||this.sourceId),...slots.map(slot=>this.gmail?this.gmail.readInbox(slot,state.mailRecords?.[slot]||[]):Promise.resolve({slot,status:'not connected',messages:[]}))]);
+      state.mailRecords||={};let checkpoint=Promise.resolve();
+      const saveProgress=(slot,messages)=>{
+        state.mailRecords[slot]=structuredClone(messages);const snapshot=structuredClone(state);
+        checkpoint=checkpoint.then(()=>this.store.write(snapshot));return checkpoint;
+      };
+      const reads=await Promise.allSettled([readCentral(this.notion,state.sourceId||this.sourceId),...slots.map(slot=>this.gmail?this.gmail.readInbox(slot,state.mailRecords[slot]||[],messages=>saveProgress(slot,messages)):Promise.resolve({slot,status:'not connected',messages:[]}))]);
+      await checkpoint;
       state.mailRecords||={};const mailSources=[];
       for(let i=0;i<slots.length;i++){
         const read=reads[i+1],slot=slots[i],name=slot[0].toUpperCase()+slot.slice(1)+' inbox';

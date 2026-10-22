@@ -23,7 +23,11 @@ async function googleFailure(response,stage){
   if(response.status===429||codes.some(c=>['rateLimitExceeded','userRateLimitExceeded','RESOURCE_EXHAUSTED'].includes(c)))advice='Google limited the request rate. Wait a minute, then Refresh again.';
   if(codes.includes('domainPolicy'))advice='Your school or work administrator must allow this app.';
   const diagnostic=`${stage}: Google HTTP ${response.status}${codes.length?' ('+[...new Set(codes)].join(', ')+')':''}. ${advice} Saved records were kept.`;
-  const error=new Error(diagnostic);error.gmailDiagnostic=diagnostic;error.httpStatus=response.status;return error;
+  const error=new Error(diagnostic);error.gmailDiagnostic=diagnostic;error.httpStatus=response.status;
+  error.rateLimited=response.status===429||codes.some(c=>['rateLimitExceeded','userRateLimitExceeded','RESOURCE_EXHAUSTED'].includes(c));
+  const retry=response.headers.get('retry-after');
+  error.retryAfterMs=retry?Math.max(0,/^\d+(\.\d+)?$/.test(retry)?Number(retry)*1000:Date.parse(retry)-Date.now()):0;
+  return error;
 }
 const decode=s=>Buffer.from(s||'','base64url').toString('utf8');
 export function messageRecord(message,slot,email){
@@ -36,7 +40,7 @@ export function messageRecord(message,slot,email){
 
 // OAuth tokens are server-only, in an ignored, owner-readable local file.
 export class Gmail {
-  constructor({clientId=process.env.GOOGLE_CLIENT_ID,clientSecret=process.env.GOOGLE_CLIENT_SECRET,vault=new Store(new URL('./.local/google/',import.meta.url)),fetcher=fetch}={}){Object.assign(this,{clientId,clientSecret,vault,fetcher});this.pending=new Map();this.access=new Map();this.authBusy=false;}
+  constructor({clientId=process.env.GOOGLE_CLIENT_ID,clientSecret=process.env.GOOGLE_CLIENT_SECRET,vault=new Store(new URL('./.local/google/',import.meta.url)),fetcher=fetch,requestIntervalMs=300,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms)),now=()=>Date.now(),maxNewMessages=40}={}){Object.assign(this,{clientId,clientSecret,vault,fetcher,requestIntervalMs,sleep,now,maxNewMessages});this.pending=new Map();this.access=new Map();this.authBusy=false;this.queue=Promise.resolve();this.nextRequestAt=0;this.cooldownUntil=0;this.lastRateError=null;}
   get configured(){return !!(this.clientId&&this.clientSecret);}
   async status(){const v=await this.vault.read();return {configured:this.configured,accounts:inboxSlots.map(slot=>({slot,connected:!!v.accounts?.[slot],email:v.accounts?.[slot]?.email||null}))};}
   begin(slot,origin){
@@ -68,29 +72,55 @@ export class Gmail {
     }finally{this.authBusy=false;}
   }
   async get(path,token){
-    for(let attempt=0;attempt<3;attempt++){
-      const r=await this.fetcher(GMAIL+path,{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(30000)});
-      if((r.status===429||r.status>=500)&&attempt<2){await new Promise(resolve=>setTimeout(resolve,(attempt+1)*1000));continue;}
-      if(!r.ok)throw await googleFailure(r,path.startsWith('/messages?')?'Listing inbox':path.startsWith('/messages/')?'Reading email':'Checking account');
-      return r.json();
+    for(let attempt=0;attempt<4;attempt++){
+      const read=this.queue.then(async()=>{
+        const wait=Math.max(this.nextRequestAt,this.cooldownUntil)-this.now();
+        if(wait>30000&&this.lastRateError)throw this.lastRateError;
+        if(wait>0)await this.sleep(wait);
+        this.nextRequestAt=this.now()+this.requestIntervalMs;
+        const response=await this.fetcher(GMAIL+path,{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(30000)});
+        if(response.ok)return {data:await response.json()};
+        const error=await googleFailure(response,path.startsWith('/messages?')?'Listing inbox':path.startsWith('/messages/')?'Reading email':'Checking account');
+        if(error.rateLimited||response.status>=500){
+          const delay=Math.max(error.retryAfterMs||0,1000*2**attempt);
+          this.cooldownUntil=Math.max(this.cooldownUntil,this.now()+delay);
+          this.lastRateError=error;
+        }
+        return {error};
+      });
+      this.queue=read.then(()=>{},()=>{});
+      const {data,error}=await read;
+      if(!error)return data;
+      if((error.rateLimited||error.httpStatus>=500)&&attempt<3)continue;
+      throw error;
     }
   }
-  async readInbox(slot,previous=[]){
+  async readInbox(slot,previous=[],onProgress=async()=>{}){
     const v=await this.vault.read(),account=v.accounts?.[slot];
     if(!account)return {slot,status:'not connected',messages:[]};
     let access=this.access.get(slot);
     if(!access||access.expires<Date.now()+60000){const t=await this.token({grant_type:'refresh_token',refresh_token:account.refreshToken});access={token:t.access_token,expires:Date.now()+(t.expires_in||3600)*1000};this.access.set(slot,access);}
     const existing=new Map(previous.filter(m=>m.email===account.email).map(m=>[m.id,m]));
     const ids=[];let next;
-    do{
-      const params=new URLSearchParams({labelIds:'INBOX',maxResults:'100',...(next?{pageToken:next}:{})});
-      const page=await this.get('/messages?'+params,access.token);ids.push(...(page.messages||[]).map(m=>m.id));next=page.nextPageToken;
-    }while(next&&ids.length<2000);
-    const unique=[...new Set(ids)],messages=[];
-    for(let i=0;i<unique.length;i+=5){
-      const batch=await Promise.all(unique.slice(i,i+5).map(async id=>existing.get(id)||messageRecord(await this.get('/messages/'+encodeURIComponent(id)+'?format=full',access.token),slot,account.email)));
-      messages.push(...batch);
+    try{
+      do{
+        const params=new URLSearchParams({labelIds:'INBOX',maxResults:'100',...(next?{pageToken:next}:{})});
+        const page=await this.get('/messages?'+params,access.token);ids.push(...(page.messages||[]).map(m=>m.id));next=page.nextPageToken;
+      }while(next&&ids.length<2000);
+    }catch(error){return {slot,email:account.email,status:'incomplete',messages:[...existing.values()],count:existing.size,detail:gmailFailureDetail(error)+' This scan did not finish; retained emails may be out of date.'};}
+    const unique=[...new Set(ids)],messages=unique.filter(id=>existing.has(id)).map(id=>existing.get(id));
+    let fetched=0,stopped=false,detail='';
+    for(const id of unique){
+      if(existing.has(id))continue;
+      if(fetched>=this.maxNewMessages){stopped=true;break;}
+      try{
+        messages.push(messageRecord(await this.get('/messages/'+encodeURIComponent(id)+'?format=full',access.token),slot,account.email));fetched++;
+      }catch(error){stopped=true;detail=gmailFailureDetail(error);break;}
+      if(fetched%10===0)await onProgress(messages);
     }
-    return {slot,email:account.email,status:next?'incomplete':'checked',messages,count:messages.length,detail:next?'More than 2,000 inbox messages: scan limit reached. This is not a complete inbox check.':'Read current inbox messages, including read messages. Archived mail, spam, trash, attachments, and other folders are outside this check.'};
+    await onProgress(messages);
+    const pending=unique.length-messages.length;
+    const notices=[detail,stopped?`${messages.length} emails saved; ${pending} listed emails remain unread by the app. Click Refresh again to continue without rereading saved emails.`:'',next?'More inbox pages remain beyond the 2,000-message listing cap. This is not a complete inbox check.':'','Current INBOX only; archived mail, spam, trash, attachments, and other folders are outside this check.'].filter(Boolean);
+    return {slot,email:account.email,status:next||stopped?'incomplete':'checked',messages,count:messages.length,detail:notices.join(' ')};
   }
 }

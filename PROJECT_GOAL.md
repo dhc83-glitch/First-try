@@ -24,7 +24,7 @@ Explain progress and required user actions in everyday language, one step at a t
 
 ## Remaining before it can replace the morning assistant
 
-1. Complete Google app setup and validate all three real inboxes. School/professional administrators may restrict OAuth consent. Live Gmail access has not been verified.
+1. The user completed Google Desktop app setup on their Mac and connected all three accounts. A live full scan then failed in each inbox with Google HTTP 403 rateLimitExceeded. A shared paced request queue, bounded backoff, 40-new-message batches, and durable progress checkpoints have been implemented and fixture-tested; the updated reader still needs live validation on the Mac. Do not ask the user to recreate their OAuth client or reconnect accounts solely for rate-limit errors. Cloud runtime does not inherit the Mac's Google credentials or token files.
 2. Define and implement contextual email triage and reconciliation: which items are actionable, which existing task each message changes, how updated deadlines supersede old ones, and what counts as evidence to retire a task. Current newsletter/account labeling and manual review are not this decision engine.
 3. Add evidence-backed update/archive proposals, user-approved dispositions, and reversible corrections. Missing records or absent emails must never imply deletion. Existing code does not retire outdated Notion tasks.
 4. Add durable incremental Gmail history/backfill for inboxes above the cap, optional attachment handling, appropriate source coverage, and long-run/end-to-end acceptance tests.

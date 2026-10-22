@@ -1,11 +1,12 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {Gmail,messageRecord,gmailFailureDetail} from '../gmail.js';
+const testGmail=options=>new Gmail({requestIntervalMs:0,sleep:async()=>{},now:()=>0,...options});
 const vault=accounts=>{let data={version:1,history:[],accounts};return {read:async()=>structuredClone(data),write:async v=>{data=structuredClone(v);}};};
 const raw=(id='m1')=>({id,internalDate:'1792670400000',snippet:'Review the assignment',payload:{mimeType:'multipart/alternative',headers:[{name:'Subject',value:'Assignment update'},{name:'From',value:'teacher@example.com'}],parts:[{mimeType:'text/plain',body:{data:Buffer.from('Read the updated instructions.').toString('base64url')}}]}});
 test('Gmail uses state and PKCE, readonly permission, and never returns tokens to the UI',async()=>{
  const v=vault({});let exchanged;
- const gmail=new Gmail({clientId:'id',clientSecret:'secret',vault:v,fetcher:async(url,options)=>{
+ const gmail=testGmail({clientId:'id',clientSecret:'secret',vault:v,fetcher:async(url,options)=>{
    if(url.includes('/token')){exchanged=Object.fromEntries(options.body);return Response.json({access_token:'access',refresh_token:'refresh',expires_in:3600});}
    return Response.json({emailAddress:'school@example.com'});
  }});
@@ -15,9 +16,9 @@ test('Gmail uses state and PKCE, readonly permission, and never returns tokens t
  const status=await gmail.status();assert.equal(status.accounts[1].email,'school@example.com');assert.ok(!JSON.stringify(status).includes('refresh'));assert.ok(!JSON.stringify(status).includes('access'));
  await assert.rejects(()=>gmail.finish(url.searchParams.get('state'),'code'),/expired/);
 });
-test('invalid state does not exchange codes',async()=>{const gmail=new Gmail({vault:vault({}),fetcher:()=>{throw Error('must not call');}});await assert.rejects(()=>gmail.finish('bad','code'),/expired/);});
+test('invalid state does not exchange codes',async()=>{const gmail=testGmail({vault:vault({}),fetcher:()=>{throw Error('must not call');}});await assert.rejects(()=>gmail.finish('bad','code'),/expired/);});
 test('Gmail inbox read paginates, caches immutable messages, and leaves emails untouched',async()=>{
- const calls=[];const gmail=new Gmail({clientId:'id',clientSecret:'secret',vault:vault({school:{email:'school@example.com',refreshToken:'private'}}),fetcher:async(url,opts)=>{
+ const calls=[];const gmail=testGmail({clientId:'id',clientSecret:'secret',vault:vault({school:{email:'school@example.com',refreshToken:'private'}}),fetcher:async(url,opts)=>{
    calls.push({url,method:opts.method||'GET'});
    if(url.includes('/token'))return Response.json({access_token:'access',expires_in:3600});
    if(url.includes('/messages?'))return Response.json(url.includes('pageToken=next')?{messages:[{id:'m2'}]}:{messages:[{id:'m1'}],nextPageToken:'next'});
@@ -28,7 +29,7 @@ test('Gmail inbox read paginates, caches immutable messages, and leaves emails u
 });
 test('pagination cap reports incomplete instead of claiming every email was checked',async()=>{
  let page=0;const previous=[];
- const gmail=new Gmail({clientId:'id',clientSecret:'secret',vault:vault({personal:{email:'me@example.com',refreshToken:'private'}}),fetcher:async url=>{
+ const gmail=testGmail({clientId:'id',clientSecret:'secret',vault:vault({personal:{email:'me@example.com',refreshToken:'private'}}),fetcher:async url=>{
    if(url.includes('/token'))return Response.json({access_token:'access',expires_in:3600});
    const messages=Array.from({length:100},(_,i)=>({id:'m'+(page*100+i)}));page++;return Response.json({messages,nextPageToken:'next'+page});
  }});
@@ -40,12 +41,47 @@ test('email text is data; newsletter and missing body are explicit',()=>{
  const r=messageRecord(m,'personal','me@example.com');assert.equal(r.category,'Newsletter');assert.equal(r.bodyUnavailable,true);assert.equal(r.key,'gmail:me@example.com:m1');
 });
 test('Gmail failures show phase and safe Google codes without leaking response content',async()=>{
- const gmail=new Gmail({vault:vault({}),fetcher:async()=>Response.json({error:{status:'PERMISSION_DENIED',message:'private-response-content',details:[{reason:'SERVICE_DISABLED',metadata:{private:'do not show'}}]}},{status:403})});
+ const gmail=testGmail({vault:vault({}),fetcher:async()=>Response.json({error:{status:'PERMISSION_DENIED',message:'private-response-content',details:[{reason:'SERVICE_DISABLED',metadata:{private:'do not show'}}]}},{status:403})});
  await assert.rejects(()=>gmail.get('/messages?maxResults=1','private-access-token'),e=>{
   const text=gmailFailureDetail(e);assert.match(text,/Listing inbox.*403.*SERVICE_DISABLED/);assert.match(text,/Enable Gmail API/);assert.ok(!text.includes('private'));return true;
  });
 });
 test('expired refresh permissions identify sign-in without exposing tokens',async()=>{
- const gmail=new Gmail({vault:vault({}),fetcher:async()=>Response.json({error:'invalid_grant',error_description:'private details'},{status:400})});
+ const gmail=testGmail({vault:vault({}),fetcher:async()=>Response.json({error:'invalid_grant',error_description:'private details'},{status:400})});
  await assert.rejects(()=>gmail.token({refresh_token:'private-token'}),e=>{assert.match(gmailFailureDetail(e),/Google sign-in.*invalid_grant/);assert.ok(!e.message.includes('private'));return true;});
+});
+test('Google 403 rate limits back off and retry, honoring Retry-After',async()=>{
+ let calls=0,time=0;const delays=[];
+ const gmail=testGmail({now:()=>time,sleep:async ms=>{delays.push(ms);time+=ms;},fetcher:async()=>++calls===1?Response.json({error:{errors:[{reason:'rateLimitExceeded'}]}},{status:403,headers:{'Retry-After':'2'}}):Response.json({ok:true})});
+ assert.deepEqual(await gmail.get('/messages/test?format=full','private'),{ok:true});assert.equal(calls,2);assert.deepEqual(delays,[2000]);
+});
+test('permission errors are not retried as rate limits',async()=>{
+ let calls=0;const gmail=testGmail({fetcher:async()=>{calls++;return Response.json({error:{errors:[{reason:'insufficientPermissions'}]}},{status:403});}});
+ await assert.rejects(()=>gmail.get('/messages?maxResults=1','private'),/insufficientPermissions/);assert.equal(calls,1);
+});
+test('one shared queue paces reads across concurrent accounts',async()=>{
+ let time=0,active=0,maximum=0;const starts=[];
+ const gmail=testGmail({requestIntervalMs:300,now:()=>time,sleep:async ms=>{time+=ms;},fetcher:async()=>{active++;maximum=Math.max(active,maximum);starts.push(time);await Promise.resolve();active--;return Response.json({ok:true});}});
+ await Promise.all(['a','b','c'].map(t=>gmail.get('/profile',t)));assert.equal(maximum,1);assert.deepEqual(starts,[0,300,600]);
+});
+test('rate-limited scan retains successful reads and resumes without rereading them',async()=>{
+ let limited=true,firstReads=0,checkpoints=[];
+ const gmail=testGmail({vault:vault({personal:{email:'me@example.com',refreshToken:'private'}}),fetcher:async url=>{
+   if(url.includes('/token'))return Response.json({access_token:'access',expires_in:3600});
+   if(url.includes('/messages?'))return Response.json({messages:[{id:'m1'},{id:'m2'}]});
+   if(url.includes('/m1?')){firstReads++;return Response.json(raw('m1'));}
+   return limited?Response.json({error:{errors:[{reason:'rateLimitExceeded'}]}},{status:403}):Response.json(raw('m2'));
+ }});
+ const first=await gmail.readInbox('personal',[],async records=>checkpoints.push(structuredClone(records)));
+ assert.equal(first.status,'incomplete');assert.equal(first.count,1);assert.match(first.detail,/1 listed emails remain/);assert.equal(checkpoints.at(-1).length,1);
+ limited=false;const resumed=await gmail.readInbox('personal',first.messages);assert.equal(resumed.status,'checked');assert.equal(resumed.count,2);assert.equal(firstReads,1);
+});
+test('small refresh batches make progress without duplicate messages',async()=>{
+ const gmail=testGmail({maxNewMessages:2,vault:vault({personal:{email:'me@example.com',refreshToken:'private'}}),fetcher:async url=>{
+   if(url.includes('/token'))return Response.json({access_token:'access',expires_in:3600});
+   if(url.includes('/messages?'))return Response.json({messages:[{id:'m1'},{id:'m2'},{id:'m3'}]});
+   return Response.json(raw(url.match(/\/messages\/(m\d)/)[1]));
+ }});
+ const first=await gmail.readInbox('personal');assert.equal(first.count,2);assert.equal(first.status,'incomplete');
+ const second=await gmail.readInbox('personal',first.messages);assert.equal(second.count,3);assert.equal(second.status,'checked');assert.equal(new Set(second.messages.map(m=>m.id)).size,3);
 });

@@ -7,7 +7,7 @@ const pendingSources=()=>['Personal inbox','School inbox','Professional inbox','
 export class Assistant {
   constructor({notion,store,sourceId,gmail,clock=()=>new Date()}){Object.assign(this,{notion,store,sourceId,gmail,clock});this.busy=false;}
   async state(){const s=await this.store.read();return {latest:s.latest,history:s.history,operations:s.operations||[],configured:!!this.notion};}
-  async refresh(){
+  async refresh({continueCatchup=false}={}){
     if(this.busy)throw new Error('A refresh or update is already running. Wait for it to finish.');
     this.busy=true;
     let state,run;
@@ -17,19 +17,21 @@ export class Assistant {
       state.latest=run;await this.store.write(state);
       if(!this.notion)throw new Error('Notion is not connected to this app.');
       const slots=['personal','school','professional'];
-      state.mailRecords||={};let checkpoint=Promise.resolve();
-      const saveProgress=(slot,messages)=>{
-        state.mailRecords[slot]=structuredClone(messages);const snapshot=structuredClone(state);
+      state.mailRecords||={};state.mailScans||={};let checkpoint=Promise.resolve();
+      const saveProgress=(slot,messages,scan)=>{
+        state.mailRecords[slot]=structuredClone(messages);if(scan)state.mailScans[slot]=structuredClone(scan);
+        run.sources[slots.indexOf(slot)+1]={name:slot[0].toUpperCase()+slot.slice(1)+' inbox',status:scan?.complete?'checked':'reading',count:messages.length,detail:scan?.detail||'Progress saved; catch-up is continuing.'};
+        const snapshot=structuredClone(state);
         checkpoint=checkpoint.then(()=>this.store.write(snapshot));return checkpoint;
       };
-      const reads=await Promise.allSettled([readCentral(this.notion,state.sourceId||this.sourceId),...slots.map(slot=>this.gmail?this.gmail.readInbox(slot,state.mailRecords[slot]||[],messages=>saveProgress(slot,messages)):Promise.resolve({slot,status:'not connected',messages:[]}))]);
+      const reads=await Promise.allSettled([readCentral(this.notion,state.sourceId||this.sourceId),...slots.map(slot=>this.gmail?this.gmail.readInbox(slot,state.mailRecords[slot]||[],(messages,scan)=>saveProgress(slot,messages,scan),state.mailScans[slot],{reuseComplete:continueCatchup}):Promise.resolve({slot,status:'not connected',messages:[]}))]);
       await checkpoint;
       state.mailRecords||={};const mailSources=[];
       for(let i=0;i<slots.length;i++){
         const read=reads[i+1],slot=slots[i],name=slot[0].toUpperCase()+slot.slice(1)+' inbox';
         if(read.status==='rejected'){mailSources.push({name,status:'failed',detail:gmailFailureDetail(read.reason)});continue;}
         const inbox=read.value;
-        mailSources.push({name,status:inbox.status,count:inbox.count,detail:inbox.detail||'Not checked. Connect this Gmail account in the app.'});
+        mailSources.push({name,status:inbox.status,count:inbox.count,canContinue:inbox.canContinue===true,detail:inbox.detail||'Not checked. Connect this Gmail account in the app.'});
         if(['checked','incomplete'].includes(inbox.status))state.mailRecords[slot]=inbox.messages;
       }
       run.sources=[{name:'Central Tasks',status:reads[0].status==='fulfilled'?'checked':'failed'},...mailSources,{name:'External calendar (optional)',status:'not connected',optional:true,detail:'Only commitments stored in Central Tasks are checked.'}];

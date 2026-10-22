@@ -1,6 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createApp} from '../server.js';
+import {Store} from '../store.js';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 test('local dashboard and mocked live read; writes require confirmation and stale guard',async(t)=>{
   const id='11111111-1111-1111-1111-111111111111';let writes=0,stale=false;
   const page={id,url:'https://www.notion.so/'+id,last_edited_time:'v1',properties:{Name:{type:'title',title:[{plain_text:'Live task'}]},Status:{type:'status',status:{name:'Active'}},Schedule:{type:'date',date:{start:'2026-10-23T07:00:00-04:00'}}}};
@@ -18,4 +22,17 @@ test('local dashboard and mocked live read; writes require confirmation and stal
   stale=true;assert.equal((await post('update',{taskId:id,action:'clearSchedule',confirmed:true})).status,409);assert.equal(writes,0);
   stale=false;assert.equal((await post('update',{taskId:id,action:'clearSchedule',confirmed:true})).status,200);assert.equal(writes,1);
   assert.equal((await post('update',{taskId:id,action:'clearSchedule',confirmed:true})).status,400);
+});
+test('HTTP start catches up in background, exposes status, and performs no Notion writes',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'refresh-http-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ const types={'Task name':'title',Status:'select','On calendar':'date',Done:'checkbox','Due date':'date',Start:'date','Finish by':'date','Commitment time':'date','Do date':'date',Area:'select',Priority:'select',Kind:'select','Next action':'rich_text','Effort minutes':'number','Record basis':'select'};
+ const schema={id:'11111111-1111-1111-1111-111111111111',properties:Object.fromEntries(Object.entries(types).map(([name,type])=>[name,{type}]))};
+ let writes=0;const notion={discover:async()=>[{id:schema.id,title:'Central Tasks'}],call:async(path,method)=>{if(method&&method!=='GET')writes++;return schema;},source:async()=>schema,all:async()=>[]};
+ const gmail={readInbox:async(slot,records,checkpoint,scan)=>{const count=(scan?.count||0)+1,next={count};const messages=[{id:slot,slot,email:slot+'@example.com',key:'gmail:'+slot}];await checkpoint(messages,next);return {status:count>=2?'checked':'incomplete',messages,count:1,canContinue:count<2};}};
+ const app=createApp({notion,gmail,store:new Store(dir)});await new Promise(r=>app.listen(0,'127.0.0.1',r));t.after(()=>app.close());const base=`http://127.0.0.1:${app.address().port}`;
+ const config=await(await fetch(base+'/api/config')).json();
+ const post=async route=>fetch(base+'/api/'+route,{method:'POST',headers:{'Content-Type':'application/json','X-Auditor-Token':config.csrf},body:'{}'});
+ assert.equal((await post('assistant/start')).status,202);
+ let state;for(let i=0;i<50;i++){state=await(await post('assistant/state')).json();if(state.job?.status!=='running')break;await new Promise(r=>setTimeout(r,10));}
+ assert.equal(state.job.status,'complete');assert.equal(state.job.rounds,2);assert.equal(state.latest.status,'complete');assert.equal(state.latest.inboxReview.length,3);assert.equal(writes,0);
 });

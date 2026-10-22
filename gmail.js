@@ -95,32 +95,52 @@ export class Gmail {
       throw error;
     }
   }
-  async readInbox(slot,previous=[],onProgress=async()=>{}){
+  async readInbox(slot,previous=[],onProgress=async()=>{},savedScan=null,{reuseComplete=false}={}){
     const v=await this.vault.read(),account=v.accounts?.[slot];
-    if(!account)return {slot,status:'not connected',messages:[]};
+    if(!account)return {slot,status:'not connected',messages:[],canContinue:false};
+    const existing=new Map(previous.filter(m=>m.email===account.email).map(m=>[m.id,m]));
+    let scan=savedScan?.email===account.email?structuredClone(savedScan):null;
+    if(reuseComplete&&scan&&(scan.complete||scan.paused))return {slot,email:account.email,status:scan.complete?'checked':'incomplete',messages:[...existing.values()],count:existing.size,canContinue:false,detail:scan.detail||'Current inbox scan finished.'};
+    if(!scan||scan.complete)scan={email:account.email,startedAt:new Date().toISOString(),pageToken:null,listed:false,pendingIds:[],seenIds:[],complete:false,paused:false};
+    scan.paused=false;
     let access=this.access.get(slot);
     if(!access||access.expires<Date.now()+60000){const t=await this.token({grant_type:'refresh_token',refresh_token:account.refreshToken});access={token:t.access_token,expires:Date.now()+(t.expires_in||3600)*1000};this.access.set(slot,access);}
-    const existing=new Map(previous.filter(m=>m.email===account.email).map(m=>[m.id,m]));
-    const ids=[];let next;
-    try{
-      do{
-        const params=new URLSearchParams({labelIds:'INBOX',maxResults:'100',...(next?{pageToken:next}:{})});
-        const page=await this.get('/messages?'+params,access.token);ids.push(...(page.messages||[]).map(m=>m.id));next=page.nextPageToken;
-      }while(next&&ids.length<2000);
-    }catch(error){return {slot,email:account.email,status:'incomplete',messages:[...existing.values()],count:existing.size,detail:gmailFailureDetail(error)+' This scan did not finish; retained emails may be out of date.'};}
-    const unique=[...new Set(ids)],messages=unique.filter(id=>existing.has(id)).map(id=>existing.get(id));
-    let fetched=0,stopped=false,detail='';
-    for(const id of unique){
-      if(existing.has(id))continue;
-      if(fetched>=this.maxNewMessages){stopped=true;break;}
+    let fetched=0,pages=0,errorDetail='';
+    const checkpoint=()=>onProgress([...existing.values()],scan);
+    const seen=new Set(scan.seenIds);
+    while(fetched<this.maxNewMessages&&pages<4){
+      if(scan.pendingIds.length){
+        const id=scan.pendingIds[0];
+        if(existing.has(id)){scan.pendingIds.shift();continue;}
+        try{
+          const record=messageRecord(await this.get('/messages/'+encodeURIComponent(id)+'?format=full',access.token),slot,account.email);
+          existing.set(id,record);scan.pendingIds.shift();fetched++;
+        }catch(error){
+          if(error.httpStatus===404){scan.pendingIds.shift();continue;}
+          scan.paused=true;errorDetail=gmailFailureDetail(error);break;
+        }
+        if(fetched%10===0)await checkpoint();
+        continue;
+      }
+      if(scan.listed&&!scan.pageToken)break;
       try{
-        messages.push(messageRecord(await this.get('/messages/'+encodeURIComponent(id)+'?format=full',access.token),slot,account.email));fetched++;
-      }catch(error){stopped=true;detail=gmailFailureDetail(error);break;}
-      if(fetched%10===0)await onProgress(messages);
+        const params=new URLSearchParams({labelIds:'INBOX',maxResults:'100',...(scan.pageToken?{pageToken:scan.pageToken}:{})});
+        const page=await this.get('/messages?'+params,access.token);pages++;
+        if(page.nextPageToken&&page.nextPageToken===scan.pageToken)throw new Error('Gmail pagination did not advance.');
+        for(const message of page.messages||[]){if(!seen.has(message.id)){seen.add(message.id);scan.pendingIds.push(message.id);}}
+        scan.seenIds=[...seen];scan.pageToken=page.nextPageToken||null;scan.listed=true;
+        await checkpoint();
+      }catch(error){
+        // Expired pagination cursors restart inventory while preserving cached bodies.
+        if(error.httpStatus===400&&scan.pageToken&&(scan.restarts||0)<1){scan.restarts=(scan.restarts||0)+1;scan.pageToken=null;scan.listed=false;scan.pendingIds=[];scan.seenIds=[];scan.detail='Inventory cursor expired; restarting the listing with saved emails retained.';await checkpoint();return {slot,email:account.email,status:'incomplete',messages:[...existing.values()],count:existing.size,canContinue:true,detail:scan.detail};}
+        scan.paused=true;errorDetail=gmailFailureDetail(error);break;
+      }
     }
-    await onProgress(messages);
-    const pending=unique.length-messages.length;
-    const notices=[detail,stopped?`${messages.length} emails saved; ${pending} listed emails remain unread by the app. Click Refresh again to continue without rereading saved emails.`:'',next?'More inbox pages remain beyond the 2,000-message listing cap. This is not a complete inbox check.':'','Current INBOX only; archived mail, spam, trash, attachments, and other folders are outside this check.'].filter(Boolean);
-    return {slot,email:account.email,status:next||stopped?'incomplete':'checked',messages,count:messages.length,detail:notices.join(' ')};
+    scan.complete=scan.listed&&!scan.pageToken&&scan.pendingIds.length===0;
+    if(scan.complete){for(const id of existing.keys())if(!seen.has(id))existing.delete(id);}
+    const remaining=scan.pendingIds.filter(id=>!existing.has(id)).length;
+    scan.detail=[errorDetail,`${existing.size} emails saved.`,scan.complete?'All pages of this inbox scan have been read.':`${remaining} pending emails on listed pages${scan.pageToken?'; additional inbox pages remain':''}.`,scan.paused?'Catch-up paused. Progress was kept; click Refresh to retry.':!scan.complete?'Automatic catch-up can continue from this point.':'','Current INBOX only; archived mail, spam, trash, and attachments are outside this check.'].filter(Boolean).join(' ');
+    await checkpoint();
+    return {slot,email:account.email,status:scan.complete?'checked':'incomplete',messages:[...existing.values()],count:existing.size,canContinue:!scan.complete&&!scan.paused,detail:scan.detail};
   }
 }

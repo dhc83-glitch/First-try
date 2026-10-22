@@ -27,14 +27,22 @@ test('Gmail inbox read paginates, caches immutable messages, and leaves emails u
  const result=await gmail.readInbox('school');assert.equal(result.status,'checked');assert.equal(result.messages.length,2);assert.ok(result.messages[0].body.includes('updated instructions'));
  const details=calls.filter(c=>c.url.includes('?format=full')).length;await gmail.readInbox('school',result.messages);assert.equal(calls.filter(c=>c.url.includes('?format=full')).length,details);assert.ok(calls.filter(c=>c.url.includes('gmail.googleapis.com')).every(c=>c.method==='GET'));
 });
-test('pagination cap reports incomplete instead of claiming every email was checked',async()=>{
- let page=0;const previous=[];
- const gmail=testGmail({clientId:'id',clientSecret:'secret',vault:vault({personal:{email:'me@example.com',refreshToken:'private'}}),fetcher:async url=>{
+test('saved pagination cursors reach beyond 2,000 messages without duplicate body reads',async()=>{
+ let scan,records=[],listCalls=0;const reads=new Map();
+ const gmail=testGmail({maxNewMessages:500,vault:vault({personal:{email:'me@example.com',refreshToken:'private'}}),fetcher:async url=>{
    if(url.includes('/token'))return Response.json({access_token:'access',expires_in:3600});
-   const messages=Array.from({length:100},(_,i)=>({id:'m'+(page*100+i)}));page++;return Response.json({messages,nextPageToken:'next'+page});
+   if(url.includes('/messages?')){
+     listCalls++;const index=Number(new URL(url).searchParams.get('pageToken')||0);
+     return Response.json({messages:Array.from({length:Math.min(100,2101-index)},(_,i)=>({id:'m'+(index+i)})),...(index+100<2101?{nextPageToken:String(index+100)}:{})});
+   }
+   const id=url.match(/\/messages\/(m\d+)/)[1];reads.set(id,(reads.get(id)||0)+1);return Response.json(raw(id));
  }});
- for(let i=0;i<2000;i++)previous.push({id:'m'+i,email:'me@example.com'});
- const result=await gmail.readInbox('personal',previous);assert.equal(result.status,'incomplete');assert.equal(result.count,2000);
+ let result;for(let round=0;round<10;round++){
+   result=await gmail.readInbox('personal',records,async(r,s)=>{records=structuredClone(r);scan=structuredClone(s);},scan,{reuseComplete:round>0});
+   if(result.status==='checked')break;
+ }
+ assert.equal(result.status,'checked');assert.equal(result.count,2101);assert.equal(listCalls,22);assert.ok([...reads.values()].every(n=>n===1));
+ const before=listCalls;await gmail.readInbox('personal',records,async()=>{},scan,{reuseComplete:true});assert.equal(listCalls,before);
 });
 test('email text is data; newsletter and missing body are explicit',()=>{
  const m=raw();m.payload.headers.push({name:'List-Unsubscribe',value:'https://example.com'});m.payload.parts=[];
@@ -73,7 +81,7 @@ test('rate-limited scan retains successful reads and resumes without rereading t
    return limited?Response.json({error:{errors:[{reason:'rateLimitExceeded'}]}},{status:403}):Response.json(raw('m2'));
  }});
  const first=await gmail.readInbox('personal',[],async records=>checkpoints.push(structuredClone(records)));
- assert.equal(first.status,'incomplete');assert.equal(first.count,1);assert.match(first.detail,/1 listed emails remain/);assert.equal(checkpoints.at(-1).length,1);
+ assert.equal(first.status,'incomplete');assert.equal(first.count,1);assert.match(first.detail,/1 pending emails/);assert.equal(checkpoints.at(-1).length,1);
  limited=false;const resumed=await gmail.readInbox('personal',first.messages);assert.equal(resumed.status,'checked');assert.equal(resumed.count,2);assert.equal(firstReads,1);
 });
 test('small refresh batches make progress without duplicate messages',async()=>{

@@ -7,10 +7,12 @@ import {audit,defaults} from './audit.js';
 import {Store} from './store.js';
 import {Assistant} from './assistant-service.js';
 import {Gmail} from './gmail.js';
+import {RefreshJob} from './refresh-job.js';
 
 export function createApp({token=process.env.NOTION_TOKEN, databaseId=process.env.NOTION_DATABASE_ID, notion=token?new Notion(token):null,store=new Store(),gmail=new Gmail()}={}){
   const csrf=randomBytes(32).toString('hex'); let snapshot=null; let busy=false;
   const assistant=new Assistant({notion,store,sourceId:databaseId,gmail});
+  const job=new RefreshJob(assistant);
   const json=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
   const body=async req=>{let text='';for await(const chunk of req){text+=chunk;if(text.length>65536)throw new Error('Request too large');}return JSON.parse(text||'{}');};
   const id=v=>{if(typeof v!=='string'||!/^[a-f0-9-]{32,36}$/i.test(v))throw new Error('Enter a valid Notion database or data source ID.');return v;};
@@ -35,7 +37,10 @@ export function createApp({token=process.env.NOTION_TOKEN, databaseId=process.en
         if(path==='/api/gmail/status')return json(res,200,await gmail.status());
         if(path==='/api/gmail/connect')return json(res,200,{url:gmail.begin(data.slot,`http://${host}`)});
         if(!notion)return json(res,503,{error:'Set NOTION_TOKEN in the server environment, then restart. Never enter a token in chat.'});
-        if(path==='/api/assistant/state')return json(res,200,await assistant.state());
+        if(path==='/api/assistant/state')return json(res,200,{...await assistant.state(),job:job.current});
+        if(path==='/api/assistant/start'){if(busy)throw new Error('A Notion update is running.');return json(res,202,{job:job.start()});}
+        if(path==='/api/assistant/stop')return json(res,200,job.stop());
+        if(job.running&&['/api/assistant/refresh','/api/assistant/approve','/api/assistant/mail-review','/api/audit','/api/update'].includes(path))throw new Error('Catch-up is running. Stop it and wait for the current batch before reviewing changes.');
         if(path==='/api/assistant/refresh'){if(busy)throw new Error('A Notion update is running.');return json(res,200,await assistant.refresh());}
         if(path==='/api/assistant/approve'){if(busy)throw new Error('A Notion update is running.');return json(res,200,await assistant.approve(data.proposalId,data.confirmed));}
         if(path==='/api/assistant/mail-review'){if(busy)throw new Error('A Notion update is running.');return json(res,200,await assistant.reviewMail(data));}

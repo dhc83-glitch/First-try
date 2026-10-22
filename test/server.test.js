@@ -1,0 +1,21 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {createApp} from '../server.js';
+test('local dashboard and mocked live read; writes require confirmation and stale guard',async(t)=>{
+  const id='11111111-1111-1111-1111-111111111111';let writes=0,stale=false;
+  const page={id,url:'https://www.notion.so/'+id,last_edited_time:'v1',properties:{Name:{type:'title',title:[{plain_text:'Live task'}]},Status:{type:'status',status:{name:'Active'}},Schedule:{type:'date',date:{start:'2026-10-23T07:00:00-04:00'}}}};
+  const notion={call:async(path,method,body)=>{if(method==='PATCH'){writes++;assert.deepEqual(body.properties.Schedule,{date:null});return {};}if(path.startsWith('/pages/'))return {...page,last_edited_time:stale?'v2':'v1'};return {id,properties:{Name:{type:'title'},Status:{type:'status'},Schedule:{type:'date'}}};},all:async()=>[page]};
+  const server=createApp({notion});await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>server.close());const base=`http://127.0.0.1:${server.address().port}`;
+  const config=await (await fetch(base+'/api/config')).json();assert.equal(config.connected,true);assert.equal(config.token,undefined);
+  assert.match(await (await fetch(base)).text(),/Personal Task Auditor/);
+  const post=(path,body,csrf=config.csrf)=>fetch(base+'/api/'+path,{method:'POST',headers:{'Content-Type':'application/json','X-Auditor-Token':csrf},body:JSON.stringify(body)});
+  assert.equal((await post('audit',{},'wrong')).status,403);
+  const gmailStatus=await (await post('gmail/status',{})).json();assert.equal(gmailStatus.accounts.length,3);assert.ok(gmailStatus.accounts.every(a=>a.connected===false));
+  const callback=await fetch(base+'/oauth/gmail/callback?state=invalid&code=private-code');assert.equal(callback.status,400);assert.ok(!(await callback.text()).includes('private-code'));
+  const read=()=>post('audit',{sourceId:id,map:{title:'Name',status:'Status',scheduled:'Schedule'}});
+  let response=await read();assert.equal(response.status,200);const data=await response.json();assert.equal(data.tasks[0].title,'Live task');assert.ok(data.issues.some(i=>i.type==='Blocked time'));assert.equal(writes,0);
+  assert.equal((await post('update',{taskId:id,action:'clearSchedule'})).status,400);assert.equal(writes,0);
+  stale=true;assert.equal((await post('update',{taskId:id,action:'clearSchedule',confirmed:true})).status,409);assert.equal(writes,0);
+  stale=false;assert.equal((await post('update',{taskId:id,action:'clearSchedule',confirmed:true})).status,200);assert.equal(writes,1);
+  assert.equal((await post('update',{taskId:id,action:'clearSchedule',confirmed:true})).status,400);
+});

@@ -1,0 +1,39 @@
+PERSONAL TASK AUDITOR — WINDOWS
+
+This is a development version, not a finished replacement for your morning assistant.
+It does not make automatic changes to Notion. Gmail is not connected yet.
+
+1. Extract this entire ZIP: right-click it in Downloads and choose Extract All.
+   Work from the extracted folder, not the ZIP preview.
+
+2. Visit https://nodejs.org/ and install Node.js 24 LTS for Windows.
+   Node.js runs the app on your computer. Use the official website.
+
+3. Double-click Start-Windows.cmd in the extracted folder.
+   Leave the black command window open. It should say the app is running.
+
+4. In your browser, type http://127.0.0.1:3000 into the address bar.
+   This address works on the computer running the app; it is not a cloud preview.
+   Do not expect the cloud Notion connection to transfer to your computer.
+
+5. To connect Notion on this computer, create a local .env file:
+   Open Notepad and enter NOTION_TOKEN= followed by your current private Notion
+   integration token on the same line. Do not include quotation marks.
+   Choose File > Save As, select All files (*.*), and name it .env in this app's
+   extracted folder. It must be .env, not .env.txt. Never share this file or paste
+   the token into chat. Use your replacement token, not one previously exposed.
+   Close the app command window, open Start-Windows.cmd again, then reload the
+   browser page. The existing integration's access to Central Tasks is retained.
+
+6. Click Refresh my assistant. The first refresh can take a few seconds.
+   Central Tasks should be checked. The three Gmail inboxes will say not connected.
+   That is expected until the separate Google setup is complete.
+
+Gmail setup requires creating a Google OAuth app and signing in to each inbox.
+Ask for one-step-at-a-time help when the Notion dashboard is working locally.
+Detailed setup and limitations are in README.md; the overall goal is in
+PROJECT_GOAL.md.
+
+The app's private local records are saved in .local. Do not share that folder.
+Closing the command window stops the app. Your records remain for next time.
+No packages need to be downloaded through npm: there are no external dependencies.

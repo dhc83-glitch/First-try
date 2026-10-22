@@ -1,0 +1,1 @@
+{"name":"personal-task-auditor","version":"1.0.0","private":true,"type":"module","scripts":{"start":"node --use-env-proxy --env-file-if-exists=.env server.js","test":"node --test"},"engines":{"node":">=24.5"}}

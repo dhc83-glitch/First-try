@@ -10,7 +10,7 @@ task_auditor_stage=$(mktemp -d "${TMPDIR:-/tmp}/task-auditor-update.XXXXXX")
 trap 'rm -rf "$task_auditor_stage"' EXIT
 trap 'exit 1' HUP INT TERM
 task_auditor_base='https://raw.githubusercontent.com/dhc83-glitch/First-try/main'
-task_auditor_files='package.json gmail.js assistant-service.js refresh-job.js server.js assistant.js audit.js notion.js store.js public/index.html public/app.js public/style.css README.md PROJECT_GOAL.md test/gmail.test.js test/assistant.test.js test/audit.test.js test/notion.test.js test/server.test.js test/refresh-job.test.js'
+task_auditor_files='package.json gmail.js assistant-service.js refresh-job.js cleanup.js home-summary.js server.js assistant.js audit.js notion.js store.js public/index.html public/app.js public/style.css README.md PROJECT_GOAL.md test/gmail.test.js test/assistant.test.js test/audit.test.js test/notion.test.js test/server.test.js test/refresh-job.test.js test/cleanup.test.js'
 
 echo 'Downloading the app update. Your .env and private .local records will be kept.'
 for task_auditor_file in $task_auditor_files; do

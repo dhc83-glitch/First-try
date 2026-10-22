@@ -109,3 +109,8 @@ test('live catch-up keeps a finished inbox checked and does not label waiting so
  assert.ok(!live.sources.find(s=>s.name==='Personal inbox').detail.includes('Old count'));
  release();await run;
 });
+test('Notion-only reload does not scan Gmail or claim fresh email coverage',async t=>{
+ const store=await fixture(t);
+ const service=new Assistant({store,sourceId,clock:()=>now,notion:{source:async()=>schema,all:async()=>[page()]},gmail:{readInbox:async()=>{throw Error('must not scan');}}});
+ const report=await service.refresh({taskOnly:true});assert.equal(report.tasks.length,1);assert.equal(report.sources.find(s=>s.name==='Personal inbox').status,'cached');assert.equal(report.status,'partial');
+});

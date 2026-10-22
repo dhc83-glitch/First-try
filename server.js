@@ -43,10 +43,16 @@ export function createApp({token=process.env.NOTION_TOKEN, databaseId=process.en
         }
         if(path==='/api/assistant/start'){if(busy)throw new Error('A Notion update is running.');return json(res,202,{job:job.start()});}
         if(path==='/api/assistant/stop')return json(res,200,job.stop());
-        if(job.running&&['/api/assistant/refresh','/api/assistant/approve','/api/assistant/mail-review','/api/audit','/api/update'].includes(path))throw new Error('Catch-up is running. Stop it and wait for the current batch before reviewing changes.');
+        if(job.running&&['/api/assistant/refresh','/api/assistant/approve','/api/assistant/mail-review','/api/assistant/resolve-task','/api/assistant/resolve-routine','/api/assistant/forget-decision','/api/assistant/home-preview','/api/assistant/home-approve','/api/audit','/api/update'].includes(path))throw new Error('Catch-up is running. Stop it and wait for the current batch before reviewing changes.');
         if(path==='/api/assistant/refresh'){if(busy)throw new Error('A Notion update is running.');return json(res,200,await assistant.refresh());}
         if(path==='/api/assistant/approve'){if(busy)throw new Error('A Notion update is running.');return json(res,200,await assistant.approve(data.proposalId,data.confirmed));}
         if(path==='/api/assistant/mail-review'){if(busy)throw new Error('A Notion update is running.');return json(res,200,await assistant.reviewMail(data));}
+        if(path==='/api/assistant/resolve-task'){if(busy)throw new Error('A Notion update is running.');return json(res,200,await assistant.resolveTask(data));}
+        if(path==='/api/assistant/resolve-routine'){if(busy)throw new Error('A Notion update is running.');return json(res,200,await assistant.resolveRoutine(data));}
+        if(path==='/api/assistant/forget-decision'){if(busy)throw new Error('A Notion update is running.');return json(res,200,await assistant.forgetDecision(data));}
+        if(path==='/api/assistant/home-preview'){if(busy)throw new Error('A Notion update is running.');return json(res,200,await assistant.homePreview());}
+        if(path==='/api/assistant/home-approve'){if(busy)throw new Error('A Notion update is running.');return json(res,200,await assistant.approveHome(data));}
+        if(path==='/api/assistant/tasks-refresh'){if(busy||job.running)throw new Error('Finish or stop the running catch-up first.');return json(res,200,await assistant.refresh({taskOnly:true}));}
         if(path==='/api/databases')return json(res,200,{databases:await notion.discover()});
         if(path==='/api/schema'){
           const source=await notion.source(id(data.id));

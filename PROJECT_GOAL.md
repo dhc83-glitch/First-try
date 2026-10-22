@@ -6,7 +6,7 @@ Explain progress and required user actions in everyday language, one step at a t
 
 ## Current operating rules
 
-- Notion writes need explicit approval for each change. The user has not authorized unattended additions, edits, archival, or deletion.
+- Updated user authorization: one Refresh should apply routine Notion updates automatically, with new information provided separately. Earlier individual approval requirements are superseded for supported routine policy. Do not delete records or silently retry uncertain writes. Report exceptions rather than asking for routine approvals.
 - Timezone: America/New_York, including daylight saving time.
 - Monday–Friday 6:00–9:30 AM is protected. Fixed commitments, such as exams, should be reviewed as possible exceptions rather than moved automatically.
 - Avoid discretionary work after 10 PM. Current suggestions use a conservative 9:30 AM–10 PM window for all work.
@@ -23,14 +23,16 @@ Explain progress and required user actions in everyday language, one step at a t
 - User-approved email-to-task creation with a persistent Gmail source key, duplicate check, and verification. No automatic semantic interpretation, deadline guessing, or email changes.
 - User-approved schedule suggestions write Start, Finish by, Do date, and On calendar together, then read back the result.
 - Cleanup review distinguishes past events/exams from unresolved assignments; approved completion/cancellation stores a decision, optional result note, and verified Notion state. No private user-specific cancellation facts are hard-coded in source.
-- Daily internship-goal repeats are grouped for a reviewed keeper/cancellation batch. This is not yet a full recurring-routine engine.
-- A reviewed Home update replaces only its dated callout and summary paragraph, with stale checks and verification.
+- Refresh consolidates the exact daily internship template into one master, preserves completion today, and reuses that page the next New York day. This is not a universal recurring-routine engine.
+- Refresh updates only Home’s supported dated callout and summary paragraph, with stale checks and verification.
+- Refresh processes explicit saved local updates, reapplies remembered decisions, and closes narrow past event reminders. Ambiguous notes and uncertain writes are durable exceptions. Questions/negations/future plans do not authorize closing tasks.
+- Automatic work-time application is deferred while collected emails remain unreconciled. Raw-read coverage is not semantic completeness.
 
 ## Remaining before it can replace the morning assistant
 
 1. The user completed Google Desktop app setup on their Mac and connected all three accounts. The shared paced queue resolved the observed Google rate-limit failures; screenshots showed catch-up above 3,000 messages. The user has now stopped that scan because they do not need history that far back. Install the scoped recent-email update along with cleanup. Do not reconnect accounts solely for an old disconnected placeholder or rate-limit errors. Cloud runtime does not inherit the Mac's Google credentials or token files.
 2. Define and implement contextual email triage and reconciliation: which items are actionable, which existing task each message changes, how updated deadlines supersede old ones, and what counts as evidence to retire a task. Current newsletter/account labeling and manual review are not this decision engine.
-3. Validate the new user-approved cleanup and two-block Home summary update on the Mac after catch-up finishes. Contextual email-to-existing-task updates, broader semantic matching, subscription-state reconciliation, and convenient rollback remain unfinished. Missing records or absent emails must never imply deletion. The app can now close approved tasks, but does not automatically know what was told to ChatGPT.
+3. Validate the new automatic cleanup, saved-update input, reusable daily master, and two-block Home summary on the Mac using the code updater. Mocked tests establish behavior; no live automatic writes were performed in development. Contextual email-to-existing-task updates, broader semantic matching, subscription-state reconciliation, and convenient rollback remain unfinished. Missing records or absent emails must never imply deletion. The app can now apply explicit locally saved decisions, but does not automatically know what was told to ChatGPT.
 4. Automatic background catch-up and durable pagination beyond 2,000 messages are implemented and fixture-tested. Validate this update on the Mac with the user's already-connected accounts. Gmail incremental history, optional attachment handling, and long-run acceptance tests remain future work.
 5. Decide how the user will run/access it routinely. The present app is local-only; a cloud onboarding process is not an accessible hosted deployment. Do not claim the user has a working click-to-refresh app on their own machine until installation/access is verified.
 6. Validate a representative morning refresh with the user: new task, updated task, completed task, changed deadline, failed inbox, conflicts, and repeated refresh without duplicates. An AI classifier, if added, must treat email bodies as untrusted data, cite evidence, and leave uncertain decisions for review.

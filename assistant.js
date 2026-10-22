@@ -87,7 +87,7 @@ export function buildPlan(tasks,now=new Date()){
     if(found)proposals.push({id:fingerprint([t.id,t.lastEdited,found]),taskId:t.id,title:t.title,lastEdited:t.lastEdited,...found,duration,assumedDuration:!t.effort,reason:`${t.priority||'Normal'} priority; ${t.effort?'uses your effort estimate':'assumes 60 minutes'}. Keeps fixed commitments and your protected hours free.`});
     else unplaced.push({taskId:t.id,title:t.title,reason:'No safe slot before the deadline in the next seven days. Review the deadline, duration, or capacity.'});
   }
-  return {upcoming,proposals,unplaced,horizon:new Date(horizon).toISOString(),assumptions:['Suggestions only. Nothing is scheduled until you approve it.','Planning hours are 9:30 AM–10 PM New York time on all days.','Only Central Tasks commitments are checked; external calendars and inboxes are not connected.','Existing future times are retained, even when the audit flags a conflict. Review those issues separately.','Tasks without effort estimates use 60 minutes. Date-only fixed commitments reserve the whole day.']};
+  return {upcoming,proposals,unplaced,horizon:new Date(horizon).toISOString(),assumptions:['Refresh can apply supported work-time suggestions when source checks and decisions are complete. Unreconciled email leaves times as suggestions.','Planning hours are 9:30 AM–10 PM New York time on all days.','Only Central Tasks commitments are checked; external calendars and inboxes are not connected.','Existing future times are retained, even when the audit flags a conflict. Review those issues separately.','Tasks without effort estimates use 60 minutes. Date-only fixed commitments reserve the whole day.']};
 }
 function offsetForDay(day){
   const instant=new Date(day+'T12:00:00Z');

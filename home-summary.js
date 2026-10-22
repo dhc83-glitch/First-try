@@ -14,7 +14,7 @@ export async function previewHome(notion,report){
   if(!paragraph)throw new Error('The dated callout has no supported summary paragraph. No page was changed.');
   const sources=report.sources.filter(s=>!s.optional).map(s=>s.name+': '+s.status).join('; ');
   const heading=report.cleanup.displayDate+' · task review';
-  const text=`${report.tasks.length} Notion tasks checked. ${report.cleanup.items.length} cleanup items need review. ${report.plan.upcoming.length} recorded deadlines in the next seven days or overdue. Source checks: ${sources}. Work-time suggestions and cleanup changes require your approval. This summary does not mean the tasks are completed or that every email has been interpreted.`;
+  const text=`${report.tasks.length} Notion tasks checked. ${report.cleanup.items.length} cleanup items need review. ${report.plan.upcoming.length} recorded deadlines in the next seven days or overdue. Source checks: ${sources}. Refresh applies supported routine cleanup and explicit saved updates automatically. Ambiguous decisions remain exceptions. ${report.automatic?.exceptions?.length||0} automatic-update exceptions. Email-to-task reconciliation is still being built; collected emails have not been fully interpreted.`;
   const changes=[{id:callout.id,type:'callout',lastEdited:callout.last_edited_time,before:callout.callout.rich_text,after:[{text:{content:heading}}]},{id:paragraph.id,type:'paragraph',lastEdited:paragraph.last_edited_time,before:paragraph.paragraph.rich_text,after:[{text:{content:text}}]}];
   return {id:randomUUID(),runId:report.id,date:report.cleanup.today,pageId:matches[0].id,changes};
 }

@@ -1,6 +1,6 @@
 # Personal Task Auditor
 
-A local app being developed into a repeatable personal assistant. It reads Notion directly, audits task data, and proposes a plan. Optional Gmail connections supply an email review queue. There are no CSV uploads, external AI calls, analytics, or automatic Notion edits. Requires **Node.js 24.5 or later**; there are no packages to install. See [PROJECT_GOAL.md](PROJECT_GOAL.md) for the intended outcome, operating rules, and remaining work. This version does not yet replace the user's complete morning assistant.
+A local app being developed into a repeatable personal assistant. It reads Notion directly, audits task data, and proposes a plan. Optional Gmail connections supply an email review queue. Refresh now makes supported routine Notion edits under the user’s updated authorization. There are no CSV uploads, external AI calls, or analytics. Requires **Node.js 24.5 or later**; there are no packages to install. See [PROJECT_GOAL.md](PROJECT_GOAL.md) for the intended outcome, operating rules, and remaining work. This version does not yet replace the user's complete morning assistant.
 
 ## One-button refresh
 
@@ -8,19 +8,25 @@ Email reading now defaults to the **last 14 days of current-INBOX messages**, no
 
 Changing this local setting does not perform a Notion write. Stop the active job first, save the window, and click Refresh. Previously saved decisions, task records, and Gmail connections are preserved. Email history that is no longer in the active window may be pruned from the local message cache; it is not deleted from Gmail.
 
-### Cleanup review and remembered decisions
+### Automatic routine updates and new information
 
-After a refresh, **Cleanup and remembered decisions** shows the New York date, past-event/exam review candidates, cancellations mentioned in task notes, result-check reminders, and repeated daily internship goals. These are deterministic heuristics, not an AI understanding of email. An overdue assignment remains unresolved; a past date never proves completion. No task is changed merely because it appears here.
+The user changed the original per-edit approval rule: **Refresh now writes supported routine updates to Notion automatically.** The browser states this before the button is clicked. Loading the dashboard, the advanced audit, `/api/assistant/refresh`, and Notion-only reloads remain read-only. Only the server-owned Refresh job applies this policy after its inbox batches finish (or pause).
 
-Use **Record a completion or cancellation for any task** for decisions you have already made. The confirmation dialog shows the task, status, selected action, and optional result/reason. Approval sets an existing Done/Canceled status and the Done checkbox consistently, clears planned work dates, and appends your note to Next action. Actual Due date and Commitment time stay as historical data. The server checks for edits first, saves intent, writes, and verifies the result. An uncertain result requires inspection and is never silently retried. No real cleanup writes were performed during development tests.
+Refresh closes narrow, fully past class/lecture/soccer-pickup/game reminders, reapplies verified remembered decisions, consolidates matching daily internship reminders, processes saved explicit updates, and updates the supported dated Home callout and summary paragraph. It never interprets an overdue assignment, quiz, exam, grade check, application, or payment as completed from its date. Reminder closure does not assert attendance. No tasks are deleted; Due date and Commitment time remain as history. Active-only Notion views hide closed records; unfiltered views retain them.
 
-Your approved decision is remembered by exact task ID in the private `.local` record. Reopened active tasks with a remembered closed decision are held out of draft scheduling for review. New email task creation is blocked when its subject or proposed title exactly matches the normalized title of a remembered closed task. This is conservative exact matching; differently worded follow-ups, aliases, and unrelated tasks with identical titles still require human review. Decisions mentioned to ChatGPT are not automatically available on the Mac: record/approve them in this app. There are no personal cancellation facts hard-coded into the public source.
+Use **Tell your assistant something new** to save information before the next Refresh. Supported examples:
 
-Repeated daily internship goals are grouped in the draft plan; only one candidate is scheduled. Explicit missed-work/catch-up titles are excluded from this grouping. **Review keeping one record** lets you choose the keeper and see which other records would be canceled. Approval cancels up to 100 displayed repeats, retaining historical records rather than deleting them. The operation is not atomic: each write is verified, progress is saved, and a failure stops the batch. Status-filtered Notion views can hide canceled items; unfiltered views still show historical records. This is cleanup of duplicate goal records, not a complete recurring-routine generator or daily progress tracker.
+- `Completed "exact task title": result or reason`
+- `Cancel "exact task title": reason`
+- `Add: new task title`
 
-**Preview today’s Notion Home summary** locates the uniquely named Home page and its existing weekday-dated callout with a summary paragraph. It displays the exact two proposed text replacements. Approval updates only those blocks and verifies them; original text is retained in the private operation history. It does not rewrite every historical heading, list, or calendar view on Home. The summary reports source coverage and pending review, not that every email has been interpreted. A changed Home block, changed refresh, or new New York date invalidates the preview. The two writes are not atomic; a partial failure is reported for inspection.
+This is a conservative parser, not general language understanding. A reported numeric grade/result can resolve a uniquely matching task. Questions, future intentions, negations, and ambiguous matches become saved exceptions. Exact quoted names are preferable. Later queued decisions for the same task supersede earlier queued ones. Additions use a persistent source key and title checks to prevent repeat creation. Personal decisions stay in ignored `.local` storage; none are hard-coded into public code. Information supplied in ChatGPT is **not automatically transferred** to this local app.
 
-After an approved cleanup, the app reloads Notion tasks without rescanning Gmail. Those email sources are explicitly marked cached. Cleanup and Home edits are blocked during active catch-up; finish or stop a batch before reviewing writes. **Forget this local decision** removes only the app's remembered decision; it does not reopen a Notion task.
+The daily internship goal uses one existing master page. Refresh cancels active duplicate template records, preserves completed-today state, and reopens the same master on the next New York day. It does not create another page each day or reconstruct missed days. Explicit cancellation stops that master. Separate missed-work and company-specific application tasks are excluded. It is a narrowly supported routine, not a universal recurring-task engine.
+
+Every write saves intent, checks for intervening edits, and reads back the result. Uncertain writes remain exceptions and are not retried automatically. Home changes replace only two supported existing blocks, retain their original text privately, and stop if the layout is unsupported. The writes are not an atomic transaction; verified earlier changes remain when a later stage fails. Notion has no atomic compare-and-swap, so concurrent external edits still carry a race. Advanced review dialogs remain available for exceptions, but routine automation does not require them.
+
+**Email interpretation remains unfinished.** Collecting recent messages does not determine which commitments they contain. While unreconciled messages remain, work-time proposals stay suggestions. The current conditional scheduling path only applies when all required source reads are complete and no unresolved update or email decisions remain. Existing future times are retained. The UI and Home summary state this limitation; the user should not be asked to review thousands of messages as the intended final workflow.
 
 The Refresh button now starts a server-owned catch-up job and returns immediately. It continues through bounded Gmail batches without additional clicks. You may close the browser tab; keep the app's Terminal process running and the Mac awake. Reopening the page shows the current job. **Stop after this batch** stops safely at a batch boundary. A server restart does not restart network work unattended; click Refresh once to resume the saved cursors. While catch-up runs, Notion write/review endpoints are blocked so an in-progress read cannot overwrite approved changes or review decisions. Email bodies are displayed lazily in groups of 50 to keep large queues usable.
 
@@ -28,7 +34,7 @@ Inbox pagination now has durable per-account page cursors and pending-message ID
 
 Click **Refresh my assistant**. On the first run it locates the original **Central Tasks** data source and remembers its ID; later runs reuse it. A configured `NOTION_DATABASE_ID` can select that original source instead. The Central Tasks profile verifies column types and fails visibly when required fields change. Other databases remain available through the advanced manual mapping workflow.
 
-Each refresh checks Central Tasks and each connected Gmail account independently. It reports checked, failed, not-connected, or incomplete sources. A failed Notion read does not erase the last successful comparison baseline. A missing inbox is never treated as empty. Overall complete means configured required reads finished, not that the app understands every message or has applied any changes. An external calendar connection is optional and not implemented; schedule occupancy is based on Central Tasks only.
+Each refresh checks Central Tasks and each connected Gmail account independently. It reports checked, failed, not-connected, or incomplete sources. A failed Notion read does not erase the last successful comparison baseline. A missing inbox is never treated as empty. Overall complete means required reads finished. The separate automatic-update results report verified writes and exceptions; it does not mean every email has been understood. An external calendar connection is optional and not implemented; schedule occupancy is based on Central Tasks only.
 
 The refresh compares additions and content changes with the prior successful read. Records that disappear are reported as no longer returned; they may have been deleted, moved, or become inaccessible. Nothing is deleted on that basis. Gmail items remain in the review queue until you choose **No task needed** or approve task creation. This review choice is local; it does not change Gmail.
 
@@ -36,7 +42,7 @@ The proposed seven-day work plan respects recorded fixed commitments, your date 
 
 Approved suggestions update **Start**, **Finish by**, **Do date**, and **On calendar** together, preserving actual deadlines and fixed commitments. The app rereads the task before writing, invalidates the remaining suggestions after a write attempt, and reads back the result. A network-ambiguous write is marked for verification and is not automatically retried. Notion has no atomic compare-and-swap, so concurrent outside edits remain a limitation.
 
-The `.local/assistant.json` record stores private task/email data, comparisons, review decisions, and the last 30 refreshes/50 operations with owner-only file permissions. `.local/` is ignored by Git. Keep it private and back it up securely if needed; do not commit it. Atomic file replacement protects against partial files; malformed data stops the refresh rather than silently resetting memory. Run only one server process against a store. This is local single-user persistence, not a multi-process database or tamper-proof audit log.
+The `.local/assistant.json` record stores private task/email data, comparisons, review decisions, and the last 30 reads and 50 recent operations (plus older unverified operations) with owner-only file permissions. `.local/` is ignored by Git. Keep it private and back it up securely if needed; do not commit it. Atomic file replacement protects against partial files; malformed data stops the refresh rather than silently resetting memory. Run only one server process against a store. This is local single-user persistence, not a multi-process database or tamper-proof audit log.
 
 ## Gmail setup (one time)
 
@@ -57,7 +63,7 @@ Each refresh reads current **INBOX** messages, including read messages, followin
 
 Gmail reads share one paced queue across all three inboxes (at least 300 milliseconds between request starts). Google 403 rate-limit errors, HTTP 429, and server errors trigger bounded exponential backoff; Retry-After is honored. Ordinary permission errors are not retried as quota errors. Progress is checkpointed after each listing page, every 10 new reads, and at scan completion/interruption. Large first loads may take a long time, but the job advances without repeated clicks. A quota pause is not an expired connection; don't reconnect solely for rateLimitExceeded. Listing failures may retain stale email records, explicitly marked incomplete. These protections reduce avoidable requests; they cannot override Google quotas.
 
-Emails are grouped by inbox area; List-Unsubscribe identifies newsletters. There is **no AI message interpretation** or automatic deadline extraction. Every item needs human review. You may approve a new task after editing its title and actual deadline. The Gmail account/message source key is stored in Notion's Source field and checked before creation to prevent repeat imports. Existing task updates, semantic matching, and retiring outdated tasks are future work. No email body is executed as an instruction.
+Emails are grouped by inbox area; List-Unsubscribe identifies newsletters. There is **no AI message interpretation** or automatic deadline extraction. The current manual email controls are an optional interim path; automatic contextual email triage is still unfinished. You may approve a new task after editing its title and actual deadline. The Gmail account/message source key is stored in Notion's Source field and checked before creation to prevent repeat imports. Email-to-existing-task updates, semantic matching, and evidence-based email reconciliation are future work. Explicit saved decisions and narrow reminder cleanup already run automatically. No email body is executed as an instruction.
 
 ## 1. Connect Notion
 
@@ -109,13 +115,13 @@ Browser dashboard → local Node server → Notion API
 Browser shows issues ← task data + findings
 ```
 
-- `server.js` serves the app, validates requests, keeps the token server-side, and gates writes on confirmation.
+- `server.js` serves the app, validates requests, keeps the token server-side, and enforces local request protection and separates read endpoints, automatic Refresh policy, and advanced confirmed edits.
 - `notion.js` sends authenticated HTTPS API requests, follows pagination, discovers databases, and normalizes properties.
 - `audit.js` is independent of Notion. It receives tasks and returns issues without modifying them.
 - `public/` contains the dashboard HTML, CSS, and browser JavaScript. Dynamic Notion text is rendered as text rather than HTML.
 - `test/` exercises the rules and server with a mocked Notion service. No credentials are required and no real Notion writes occur during tests.
 
-Codex is the coding agent that built and tests these files. The running app itself is ordinary JavaScript: the API reads/writes data, and deterministic rules produce the findings. There is no autonomous agent scheduling or editing your tasks.
+Codex is the coding agent that built and tests these files. The running app itself is ordinary JavaScript: the API reads/writes data, and deterministic rules produce the findings. The Refresh job applies deterministic automatic policies; there is no general AI agent interpreting your messages.
 
 ## Validate and troubleshoot
 
@@ -123,7 +129,7 @@ Codex is the coding agent that built and tests these files. The running app itse
 npm test
 ```
 
-These tests validate the local workflow against mock API responses. They do **not** establish that your workspace credentials, schema, or permissions work. A live check requires configuring the token, sharing a database, loading its columns, and successfully auditing its tasks. Writes should be tested only after you review an intended change in the app.
+These tests validate the local workflow against mock API responses. They do **not** establish that your workspace credentials, schema, or permissions work. A live check requires configuring the token, sharing a database, loading its columns, and successfully auditing its tasks. Development readiness checks use read-only endpoints. The main Refresh button now writes automatically; do not run it against a real workspace merely to smoke-test setup.
 
 - **401:** verify the configured integration token securely and restart the server.
 - **403 or 404:** check integration capabilities and database Connections. In cloud, also allow `api.notion.com` in environment network settings.

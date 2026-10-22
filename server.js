@@ -43,6 +43,7 @@ export function createApp({token=process.env.NOTION_TOKEN, databaseId=process.en
         }
         if(path==='/api/assistant/start'){if(busy)throw new Error('A Notion update is running.');return json(res,202,{job:job.start()});}
         if(path==='/api/assistant/stop')return json(res,200,job.stop());
+        if(path==='/api/assistant/update'){if(busy||job.running)throw new Error('Wait until this refresh finishes before saving an update.');return json(res,200,await assistant.saveUpdate(data));}
         if(path==='/api/assistant/email-window'){if(busy||job.running)throw new Error('Stop the running refresh and wait for the current batch first.');return json(res,200,await assistant.setEmailWindow(data));}
         if(job.running&&['/api/assistant/refresh','/api/assistant/approve','/api/assistant/mail-review','/api/assistant/resolve-task','/api/assistant/resolve-routine','/api/assistant/forget-decision','/api/assistant/home-preview','/api/assistant/home-approve','/api/audit','/api/update'].includes(path))throw new Error('Catch-up is running. Stop it and wait for the current batch before reviewing changes.');
         if(path==='/api/assistant/refresh'){if(busy)throw new Error('A Notion update is running.');return json(res,200,await assistant.refresh());}

@@ -5,7 +5,9 @@ import {gmailFailureDetail} from './gmail.js';
 import {cleanupReview,matchingDecisions} from './cleanup.js';
 import {previewHome} from './home-summary.js';
 import {rich} from './notion.js';
-const batchApproval=Symbol('reviewed routine cleanup');
+import {interpretUpdate,automaticCleanup,isDailyGoal} from './automatic.js';
+const batchApproval=Symbol('authorized routine update');
+const retainOperations=operations=>operations.filter((op,index)=>index<50||op.status!=='verified');
 
 const pendingSources=(state,continuing)=>[
   ...['personal','school','professional'].map(slot=>{
@@ -16,7 +18,135 @@ const pendingSources=(state,continuing)=>[
 ];
 export class Assistant {
   constructor({notion,store,sourceId,gmail,clock=()=>new Date()}){Object.assign(this,{notion,store,sourceId,gmail,clock});this.busy=false;}
-  async state(){const s=await this.store.read();return {latest:s.latest,history:s.history,operations:s.operations||[],settings:{emailLookbackDays:s.settings?.emailLookbackDays||14},configured:!!this.notion};}
+  async state(){const s=await this.store.read();return {latest:s.latest,history:s.history,operations:s.operations||[],updates:s.updates||[],automatic:s.automatic||null,settings:{emailLookbackDays:s.settings?.emailLookbackDays||14},configured:!!this.notion};}
+  async saveUpdate({text}){
+    if(this.busy)throw new Error('Wait until this refresh finishes before saving an update.');
+    if(typeof text!=='string'||!text.trim()||text.length>2000)throw new Error('Enter an update of 1–2,000 characters.');
+    this.busy=true;
+    try{const state=await this.store.read();if((state.updates||[]).some(u=>u.status==='pending'&&u.text===text.trim()))return {saved:true,alreadyQueued:true};state.updates=[...(state.updates||[]),{id:randomUUID(),text:text.trim(),status:'pending',at:this.clock().toISOString()}];await this.store.write(state);return {saved:true};}finally{this.busy=false;}
+  }
+  async applyAutomatic(){
+    const summary={at:this.clock().toISOString(),closedReminders:0,appliedUpdates:0,scheduled:0,dailyGoalUpdates:0,homeUpdated:false,exceptions:[]};
+    const initial=await this.store.read(),coverage=initial.latest?.sources,coverageStatus=initial.latest?.status;
+    if(!initial.latest?.tasks||initial.latest.status==='failed')return {...summary,exceptions:[{reason:'No successful Notion read is available.'}]};
+    for(const op of initial.operations||[])if(op.status!=='verified')summary.exceptions.push({taskId:op.taskId,title:op.title,reason:'An earlier Notion write needs verification; automatic retry is blocked.'});
+    const pending=(initial.updates||[]).filter(u=>u.status==='pending');
+    // Later explicit instructions about the same task supersede earlier queued ones.
+    const prepared=pending.map(update=>({update,parsed:interpretUpdate(update.text,initial.latest.tasks)}));
+    for(let i=0;i<prepared.length;i++){
+      const {update,parsed}=prepared[i];
+      if(parsed.taskId&&prepared.slice(i+1).some(p=>p.parsed.taskId===parsed.taskId)){
+        await this.recordUpdateOutcome(update.id,'superseded','Replaced by your later queued decision.');continue;
+      }
+      if(parsed.exception){summary.exceptions.push({updateId:update.id,reason:parsed.exception});await this.recordUpdateOutcome(update.id,'needs information',parsed.exception);continue;}
+      try{
+        if(parsed.action==='create')await this.createFromUpdate(update,parsed.title);
+        else{
+          const s=await this.store.read();
+          await this.resolveTask({taskId:parsed.taskId,action:parsed.action,note:update.text.slice(0,1000),confirmed:true},{authorization:batchApproval,runId:s.latest.id,origin:'your queued update'});
+          if(parsed.action==='done'&&isDailyGoal(initial.latest.tasks.find(t=>t.id===parsed.taskId))){
+            const s=await this.store.read();s.dailyGoal={...s.dailyGoal,masterId:parsed.taskId,lastDay:localParts(this.clock(),'America/New_York').day,completedToday:true};await this.store.write(s);
+          }
+        }
+        await this.recordUpdateOutcome(update.id,'applied','Verified in Notion.');summary.appliedUpdates++;
+      }catch(error){summary.exceptions.push({updateId:update.id,title:parsed.title,reason:error.message});await this.recordUpdateOutcome(update.id,'needs verification',error.message);}
+    }
+    await this.refresh({taskOnly:true});
+    const current=await this.store.read(),policy=automaticCleanup(current.latest.tasks,current.taskDecisions,this.clock());
+    summary.exceptions.push(...policy.exceptions);
+    const outstanding=(await this.store.read()).updates?.filter(u=>['needs information','needs verification'].includes(u.status))||[];
+    for(const u of outstanding)if(!summary.exceptions.some(e=>e.updateId===u.id))summary.exceptions.push({updateId:u.id,reason:u.detail});
+    for(const action of policy.actions){
+      try{await this.resolveTask({...action,confirmed:true},{authorization:batchApproval,runId:current.latest.id,origin:'automatic reminder policy'});summary.closedReminders++;}
+      catch(error){summary.exceptions.push({taskId:action.taskId,reason:error.message});}
+    }
+    try{summary.dailyGoalUpdates=await this.maintainDailyGoal();}catch(error){summary.exceptions.push({reason:'Daily goal: '+error.message});}
+    await this.refresh({taskOnly:true});
+    // Scheduling is deferred when inbox coverage or your explicit instructions are incomplete.
+    let state=await this.store.read();
+    if(coverage?.filter(s=>!s.optional).every(s=>s.status==='checked')&&!summary.exceptions.length){
+      const blocked=new Set([...state.latest.cleanup.items.map(i=>i.taskId),...(state.operations||[]).filter(o=>o.status!=='verified').map(o=>o.taskId)]);
+      // Reading email is not semantic triage. Do not reserve time while email
+      // commitments have not been reconciled by the unfinished decision engine.
+      if(state.latest.inboxReview.length)summary.exceptions.push({reason:'Email was collected, but automatic email-to-task reconciliation is still being built. Work times remain suggestions.'});
+      for(const proposal of state.latest.plan.proposals.filter(p=>!summary.exceptions.length&&!blocked.has(p.taskId))){
+        try{await this.approve(proposal.id,true,{authorization:batchApproval,runId:state.latest.id});summary.scheduled++;}
+        catch(error){summary.exceptions.push({taskId:proposal.taskId,title:proposal.title,reason:error.message});break;}
+      }
+    }
+    await this.refresh({taskOnly:true});
+    state=await this.store.read();state.latest.sources=coverage?coverage.map(s=>s.name==='Central Tasks'?{...s,count:state.latest.tasks.length}:s):state.latest.sources;state.latest.status=coverageStatus||state.latest.status;state.latest.automatic=summary;await this.store.write(state);
+    try{
+      const pendingHome=state.operations?.find(o=>o.title==='Update Home dated task summary');
+      if(pendingHome&&pendingHome.status!=='verified')throw new Error('An earlier Home update needs verification; it will not be overwritten automatically.');
+      const preview=await this.homePreview();await this.approveHome({previewId:preview.id,confirmed:true});summary.homeUpdated=true;}catch(error){summary.exceptions.push({reason:'Home summary: '+error.message});}
+    state=await this.store.read();state.automatic=summary;state.latest.automatic=summary;await this.store.write(state);return summary;
+  }
+  async recordUpdateOutcome(id,status,detail){const state=await this.store.read();const update=state.updates?.find(u=>u.id===id);if(update){update.status=status;update.detail=detail;await this.store.write(state);}}
+  async createFromUpdate(update,title){
+    const state=await this.store.read(),sourceKey='assistant-update:'+update.id;
+    if(matchingDecisions(title,state.taskDecisions).length)throw new Error('A remembered cancellation/completion matches this title. No task was recreated.');
+    if(state.latest.tasks.some(t=>t.title.trim().toLowerCase()===title.toLowerCase()&&!t.done&&!['Done','Canceled','Cancelled'].includes(t.status)))return;
+    const sameTitle=await this.notion.all('/data_sources/'+state.sourceId+'/query',{filter:{property:'Task name',title:{equals:title}}});
+    if(sameTitle.some(p=>!['Done','Canceled','Cancelled'].includes(p.properties.Status?.select?.name)))return;
+    const existing=await this.notion.all('/data_sources/'+state.sourceId+'/query',{filter:{property:'Source',rich_text:{equals:sourceKey}}});
+    if(existing.length)return;
+    if((state.operations||[]).some(o=>o.updateId===update.id&&o.status!=='verified'))throw new Error('A prior creation attempt needs verification; it will not be retried automatically.');
+    const schema=await this.notion.call('/data_sources/'+state.sourceId);
+    if(schema.properties.Source?.type!=='rich_text'||schema.properties['Task name']?.type!=='title')throw new Error('Source/title columns are unavailable.');
+    const choices=schema.properties.Status?.select?.options||[],status=choices.find(o=>o.name==='Inbox')?.name||choices.find(o=>o.name==='To do')?.name;
+    if(!status)throw new Error('No existing Inbox or To do status is available.');
+    const text=content=>[{text:{content}}];
+    const properties={'Task name':{title:text(title)},Status:{select:{name:status}},Source:{rich_text:text(sourceKey)}};
+    const operation={id:randomUUID(),updateId:update.id,title,at:this.clock().toISOString(),status:'pending verification',action:'create from your update'};
+    state.operations=retainOperations([operation,...(state.operations||[])]);await this.store.write(state);
+    try{
+      const created=await this.notion.call('/pages','POST',{parent:{type:'data_source_id',data_source_id:state.sourceId},properties});
+      const verified=await this.notion.call('/pages/'+created.id);
+      if(rich(verified.properties.Source?.rich_text)!==sourceKey)throw new Error('Creation verification failed');
+      operation.status='verified';operation.taskId=created.id;await this.store.write(state);
+    }catch{operation.status='needs verification';await this.store.write(state);throw new Error('Creation outcome is uncertain. It will not be retried automatically.');}
+  }
+  async maintainDailyGoal(){
+    const state=await this.store.read(),report=state.latest,today=localParts(this.clock(),'America/New_York').day;
+    const goals=report.tasks.filter(isDailyGoal);
+    if(state.dailyGoal?.pendingDay)throw new Error('An earlier daily-goal update needs verification; it will not be retried automatically.');
+    if(goals.some(t=>state.taskDecisions?.[t.id]?.verified===false))throw new Error('A daily-goal decision needs verification; it will not be retried automatically.');
+    if(!goals.length)return 0;
+    let master=goals.find(t=>t.id===state.dailyGoal?.masterId);
+    if(master&&state.taskDecisions?.[master.id]?.action==='cancel')return 0;
+    if(!master){
+      const active=goals.filter(t=>!['Canceled','Cancelled'].includes(t.status));
+      master=active.find(t=>t.id===report.cleanup.routines[0]?.keeperId)||active.sort((a,b)=>(b.doDate?.start||'').localeCompare(a.doDate?.start||''))[0];
+    }
+    if(!master)return 0;
+    let changed=0;
+    for(const other of goals.filter(t=>t.id!==master.id&&!t.done&&!['Done','Canceled','Cancelled'].includes(t.status))){
+      await this.resolveTask({taskId:other.id,action:'cancel',note:'Duplicate daily-goal reminder consolidated automatically. Kept master task: '+master.id,confirmed:true},{authorization:batchApproval,runId:report.id,origin:'automatic daily-goal policy'});changed++;
+    }
+    const current=await this.notion.call('/pages/'+master.id),fresh=await this.store.read();
+    const decision=fresh.taskDecisions?.[master.id];
+    const doneToday=(fresh.dailyGoal?.lastDay===today&&fresh.dailyGoal.completedToday)||(current.properties.Done?.checkbox===true&&(master.doDate?.start?.slice(0,10)===today||(decision?.at&&localParts(decision.at,'America/New_York').day===today)));
+    if(fresh.dailyGoal?.lastDay===today||doneToday){
+      fresh.dailyGoal={...fresh.dailyGoal,masterId:master.id,lastDay:today,completedToday:!!doneToday};await this.store.write(fresh);return changed;
+    }
+    if(current.last_edited_time!==master.lastEdited||current.archived||current.in_trash)throw new Error('The daily-goal master changed during refresh.');
+    const schema=await this.notion.call('/data_sources/'+fresh.sourceId);
+    if(!schema.properties.Status?.select?.options?.some(o=>o.name==='To do')||current.properties.Done?.type!=='checkbox'||current.properties['Do date']?.type!=='date')throw new Error('Daily-goal status/date columns are incompatible.');
+    const properties={Status:{select:{name:'To do'}},Done:{checkbox:false},'Do date':{date:{start:today}}};
+    for(const key of ['Start','Finish by','On calendar'])if(current.properties[key]?.type==='date'&&current.properties[key].date?.start?.slice(0,10)!==today)properties[key]={date:null};
+    const operation={id:randomUUID(),taskId:master.id,title:master.title,at:this.clock().toISOString(),action:'refresh daily-goal master',status:'pending verification',before:current.properties,properties};
+    fresh.operations=retainOperations([operation,...(fresh.operations||[])]);fresh.dailyGoal={...fresh.dailyGoal,masterId:master.id,pendingDay:today};await this.store.write(fresh);
+    try{
+      await this.notion.call('/pages/'+master.id,'PATCH',{properties});const verified=await this.notion.call('/pages/'+master.id);
+      if(verified.properties.Status?.select?.name!=='To do'||verified.properties.Done?.checkbox!==false||verified.properties['Do date']?.date?.start!==today)throw new Error('Daily-goal verification failed');
+      operation.status='verified';fresh.dailyGoal={...fresh.dailyGoal,lastDay:today,pendingDay:null,completedToday:false};
+      if(fresh.taskDecisions?.[master.id]?.action==='done'){
+        fresh.dailyGoal.history=[fresh.taskDecisions[master.id],...(fresh.dailyGoal.history||[])].slice(0,90);delete fresh.taskDecisions[master.id];
+      }
+      fresh.latest.needsRefresh=true;await this.store.write(fresh);return changed+1;
+    }catch{operation.status='needs verification';await this.store.write(fresh);throw new Error('Daily-goal update needs verification; no completion was assumed.');}
+  }
   async setEmailWindow({days}){
     if(this.busy)throw new Error('Stop the refresh and wait for its current batch first.');
     if(![7,14,30].includes(days))throw new Error('Choose 7, 14, or 30 days.');
@@ -64,7 +194,7 @@ export class Assistant {
       await this.store.write(next);return report;
     }catch(e){
       if(state&&run){
-        const failed={...run,status:'failed',finishedAt:this.clock().toISOString(),error:'Refresh did not finish. No Notion changes were made. The previous successful comparison record was kept.'};
+        const failed={...run,status:'failed',finishedAt:this.clock().toISOString(),error:'The Notion read did not finish. Check change history for any earlier updates in this job. The previous successful comparison record was kept.'};
         await this.store.write({...state,latest:failed,history:[{id:run.id,status:'failed',startedAt:run.startedAt,finishedAt:failed.finishedAt},...state.history].slice(0,30)});
       }
       throw e;
@@ -98,7 +228,7 @@ export class Assistant {
       const area=message.slot==='school'?'School':message.slot==='professional'?'Career':'Personal';
       const properties={'Task name':{title:text(title.trim())},Status:{select:{name:'To do'}},Area:{select:{name:area}},Source:{rich_text:text(key)},'Next action':{rich_text:text(('From: '+message.from+'\nEmail: '+message.subject+'\n'+message.snippet).slice(0,1900))},...(due?{'Due date':{date:{start:due}}}:{})};
       const operation={id:randomUUID(),mailKey:key,title:title.trim(),at:this.clock().toISOString(),status:'pending verification'};
-      state.operations=[operation,...(state.operations||[])].slice(0,50);await this.store.write(state);
+      state.operations=retainOperations([operation,...(state.operations||[])]);await this.store.write(state);
       try{
         const created=await this.notion.call('/pages','POST',{parent:{type:'data_source_id',data_source_id:state.sourceId},properties});
         const verified=await this.notion.call('/pages/'+created.id);
@@ -109,6 +239,7 @@ export class Assistant {
   }
   async resolveTask({taskId,action,note='',confirmed},batch){
     const inBatch=batch?.authorization===batchApproval;
+    const wasBusy=this.busy;
     if(confirmed!==true)throw new Error('Confirm this individual task decision first.');
     if(this.busy&&!inBatch)throw new Error('A refresh or update is running.');
     if(!['done','cancel'].includes(action))throw new Error('Choose completed or canceled.');
@@ -116,6 +247,7 @@ export class Assistant {
     this.busy=true;
     try{
       const state=await this.store.read(),report=state.latest,old=report?.tasks?.find(t=>t.id===taskId);
+      if(inBatch&&state.taskDecisions?.[taskId]?.verified===false)throw new Error('An earlier task decision needs verification; automatic retry is blocked.');
       if(!old||(report.needsRefresh&&!(inBatch&&batch.runId===report.id)))throw new Error('Refresh and review a current task first.');
       const current=await this.notion.call('/pages/'+taskId);
       if(current.last_edited_time!==old.lastEdited||current.archived||current.in_trash)throw new Error('Task changed in Notion. Refresh and review it again.');
@@ -135,8 +267,8 @@ export class Assistant {
         const cleaned=original.map(p=>Object.fromEntries(Object.entries(p).filter(([k])=>['type','text','mention','equation','annotations'].includes(k))));
         properties['Next action']={rich_text:[...cleaned,{text:{content:'\nResolution ('+localParts(this.clock(),'America/New_York').day+'): '+note.trim()}}]};
       }
-      const operation={id:randomUUID(),taskId,title:old.title,at:this.clock().toISOString(),status:'pending verification',action,before:current.properties,properties};
-      state.operations=[operation,...(state.operations||[])].slice(0,50);
+      const operation={id:randomUUID(),taskId,title:old.title,at:this.clock().toISOString(),status:'pending verification',action,origin:batch?.origin||'user review',before:current.properties,properties};
+      state.operations=retainOperations([operation,...(state.operations||[])]);
       state.taskDecisions||={};state.taskDecisions[taskId]={action,title:old.title,note:note.trim(),at:operation.at,verified:false};
       report.needsRefresh=true;await this.store.write(state);
       try{
@@ -147,7 +279,7 @@ export class Assistant {
         if(note.trim()&&!(verified.properties['Next action']?.rich_text||[]).map(p=>p.plain_text||p.text?.content||'').join('').includes(note.trim()))throw new Error('Resolution note verification failed');
         operation.status='verified';state.taskDecisions[taskId].verified=true;await this.store.write(state);return {updated:true,verified:true};
       }catch{operation.status='needs verification';await this.store.write(state);throw new Error('The decision was saved, but the Notion update needs verification. Refresh and inspect the task. No automatic retry will occur.');}
-    }finally{if(!inBatch)this.busy=false;}
+    }finally{this.busy=inBatch?wasBusy:false;}
   }
   async resolveRoutine({key,keeperId,confirmed}){
     if(confirmed!==true)throw new Error('Confirm the displayed routine cleanup first.');
@@ -190,7 +322,7 @@ export class Assistant {
         if(current.type!==change.type||current.last_edited_time!==change.lastEdited||JSON.stringify(current[change.type].rich_text)!==JSON.stringify(change.before))throw new Error('Home was edited since the preview. Generate a new preview before approving.');
       }
       const operation={id:randomUUID(),title:'Update Home dated task summary',at:this.clock().toISOString(),status:'pending verification',before:preview.changes.map(c=>({id:c.id,type:c.type,rich_text:c.before})),changes:preview.changes};
-      state.operations=[operation,...(state.operations||[])].slice(0,50);state.homePreview=null;await this.store.write(state);
+      state.operations=retainOperations([operation,...(state.operations||[])]);state.homePreview=null;await this.store.write(state);
       try{
         for(const change of preview.changes){
           await this.notion.call('/blocks/'+change.id,'PATCH',{[change.type]:{rich_text:change.after}});
@@ -201,22 +333,23 @@ export class Assistant {
       }catch{operation.status='needs verification';await this.store.write(state);throw new Error('Home may be partially updated. Inspect its dated callout before trying again. The original text was retained in the private operation record.');}
     }finally{this.busy=false;}
   }
-  async approve(proposalId,confirmed){
+  async approve(proposalId,confirmed,batch){
+    const inBatch=batch?.authorization===batchApproval,wasBusy=this.busy;
     if(confirmed!==true)throw new Error('Confirm this individual Notion change first.');
-    if(this.busy)throw new Error('A refresh or update is already running.');
+    if(this.busy&&!inBatch)throw new Error('A refresh or update is already running.');
     this.busy=true;
     try{
       const state=await this.store.read(),report=state.latest;
       const proposal=report?.plan?.proposals.find(p=>p.id===proposalId);
-      if(!proposal||report.needsRefresh)throw new Error('Refresh and review a current suggestion first.');
+      if(!proposal||(report.needsRefresh&&!(inBatch&&batch.runId===report.id)))throw new Error('Refresh and review a current suggestion first.');
       const current=await this.notion.call(`/pages/${proposal.taskId}`);
       if(current.last_edited_time!==proposal.lastEdited||current.archived||current.in_trash)throw new Error('This task changed in Notion. Refresh before approving it.');
       for(const field of ['Start','Finish by','Do date','On calendar'])if(current.properties[field]?.type!=='date')throw new Error(`The ${field} column is unavailable. Nothing was changed.`);
       const properties={'Start':{date:{start:proposal.start}},'Finish by':{date:{start:proposal.end}},'Do date':{date:{start:localParts(proposal.start,'America/New_York').day}},'On calendar':{date:{start:proposal.start,end:proposal.end}}};
       const operation={id:randomUUID(),taskId:proposal.taskId,title:proposal.title,at:this.clock().toISOString(),status:'pending verification',properties};
       // Persist intent before writing. Never automatically retry a possibly successful write.
-      report.needsRefresh=true;report.plan.proposals=[];
-      state.operations=[operation,...(state.operations||[])].slice(0,50);await this.store.write(state);
+      report.needsRefresh=true;report.plan.proposals=inBatch?report.plan.proposals.filter(p=>p.id!==proposalId):[];
+      state.operations=retainOperations([operation,...(state.operations||[])]);await this.store.write(state);
       try{
         await this.notion.call(`/pages/${proposal.taskId}`,'PATCH',{properties});
         const verified=await this.notion.call(`/pages/${proposal.taskId}`);
@@ -231,6 +364,6 @@ export class Assistant {
         operation.status='needs verification';await this.store.write(state);
         throw new Error('The update outcome is uncertain. Refresh and inspect this task in Notion before trying again. It will not be retried automatically.');
       }
-    }finally{this.busy=false;}
+    }finally{this.busy=inBatch?wasBusy:false;}
   }
 }

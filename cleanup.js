@@ -34,7 +34,7 @@ export function cleanupReview(tasks,decisions={},now=new Date()){
     routines.push({key,label:'Daily internship application goal',keeperId:keeper.id,members:members.map(t=>({id:t.id,title:t.title,doDate:t.doDate?.start||null})),detail:'One candidate is kept in the draft work plan. Other copies are held for review, not deleted. A routine is not evidence that today’s applications are finished.'});
     for(const t of members)if(t.id!==keeper.id){held.add(t.id);if(!items.some(i=>i.taskId===t.id))items.push({id:hash([t.id,t.lastEdited,key]),taskId:t.id,title:t.title,lastEdited:t.lastEdited,type:'Repeated daily routine',evidence:['This task repeats the daily internship goal.',`Draft keeper: ${keeper.title}. Confirm this is not separate catch-up work before canceling it.`],suggestedAction:'cancel'});}
   }
-  return {today,displayDate,items,routines,heldTaskIds:[...held],remembered:Object.entries(decisions).map(([taskId,d])=>({taskId,...d})),notice:'Review proposals only. Past events are not assumed completed. Actual Notion changes require individual confirmation.'};
+  return {today,displayDate,items,routines,heldTaskIds:[...held],remembered:Object.entries(decisions).map(([taskId,d])=>({taskId,...d})),notice:'Refresh closes narrow past event reminders and applies saved decisions automatically. Past assignments, quizzes, exams, and grades remain unresolved without evidence. These remaining items may need clarification.'};
 }
 export function matchingDecisions(subject,decisions={}){
   const key=titleKey(subject);return Object.entries(decisions).filter(([,d])=>titleKey(d.title)===key).map(([taskId,d])=>({taskId,title:d.title,action:d.action,note:d.note}));

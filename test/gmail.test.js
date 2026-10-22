@@ -93,3 +93,27 @@ test('small refresh batches make progress without duplicate messages',async()=>{
  const first=await gmail.readInbox('personal');assert.equal(first.count,2);assert.equal(first.status,'incomplete');
  const second=await gmail.readInbox('personal',first.messages);assert.equal(second.count,3);assert.equal(second.status,'checked');assert.equal(new Set(second.messages.map(m=>m.id)).size,3);
 });
+test('recent-email scope replaces legacy full-history cursors and excludes old cache entries',async()=>{
+ const time=Date.parse('2026-10-22T18:00:00Z'),queries=[];let checkpoint;
+ const gmail=testGmail({now:()=>time,vault:vault({personal:{email:'me@example.com',refreshToken:'private'}}),fetcher:async url=>{
+   if(url.includes('/token'))return Response.json({access_token:'access',expires_in:3600});
+   if(url.includes('/messages?')){queries.push(new URL(url).searchParams);return Response.json({messages:[{id:'recent'}]});}
+   return Response.json(raw('recent'));
+ }});
+ const old={id:'old',email:'me@example.com',receivedAt:'2020-01-01T00:00:00Z'};
+ const legacy={email:'me@example.com',pageToken:'old-history-page',pendingIds:['old'],seenIds:['old'],listed:true,complete:false};
+ const result=await gmail.readInbox('personal',[old],async(records,scan)=>checkpoint=structuredClone(scan),legacy);
+ assert.equal(result.status,'checked');assert.deepEqual(result.messages.map(m=>m.id),['recent']);assert.equal(queries[0].get('pageToken'),null);assert.equal(queries[0].get('q'),'after:'+Math.floor((time-14*86400000)/1000));assert.equal(checkpoint.lookbackDays,14);assert.match(result.detail,/Older email/);
+});
+test('scope stays fixed across catch-up batches and resets when the user chooses fewer days',async()=>{
+ let time=Date.parse('2026-10-22T18:00:00Z'),scan,records=[];const queries=[];
+ const gmail=testGmail({now:()=>time,maxNewMessages:1,vault:vault({personal:{email:'me@example.com',refreshToken:'private'}}),fetcher:async url=>{
+   if(url.includes('/token'))return Response.json({access_token:'access',expires_in:3600});
+   if(url.includes('/messages?')){queries.push(new URL(url).searchParams.get('q'));return Response.json({messages:[{id:'m1'},{id:'m2'}]});}
+   return Response.json(raw(url.includes('/m1?')?'m1':'m2'));
+ }});
+ const save=async(r,s)=>{records=structuredClone(r);scan=structuredClone(s);};
+ await gmail.readInbox('personal',records,save,scan,{lookbackDays:14});const cutoff=scan.cutoffMs;time+=60000;
+ await gmail.readInbox('personal',records,save,scan,{lookbackDays:14,reuseComplete:true});assert.equal(scan.cutoffMs,cutoff);assert.equal(queries.length,1);
+ await gmail.readInbox('personal',records,save,scan,{lookbackDays:7});assert.equal(scan.lookbackDays,7);assert.notEqual(queries[0],queries[1]);
+});

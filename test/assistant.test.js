@@ -114,3 +114,9 @@ test('Notion-only reload does not scan Gmail or claim fresh email coverage',asyn
  const service=new Assistant({store,sourceId,clock:()=>now,notion:{source:async()=>schema,all:async()=>[page()]},gmail:{readInbox:async()=>{throw Error('must not scan');}}});
  const report=await service.refresh({taskOnly:true});assert.equal(report.tasks.length,1);assert.equal(report.sources.find(s=>s.name==='Personal inbox').status,'cached');assert.equal(report.status,'partial');
 });
+test('saved email window persists while every Notion task is still read',async t=>{
+ const store=await fixture(t);const windows=[];
+ const service=new Assistant({store,sourceId,clock:()=>now,notion:{source:async()=>schema,all:async()=>[page('old',{'Due date':{type:'date',date:{start:'2027-01-01'}}})]},gmail:{readInbox:async(slot,records,checkpoint,scan,options)=>{windows.push(options.lookbackDays);return {status:'checked',messages:[],count:0};}}});
+ await service.setEmailWindow({days:7});const report=await service.refresh();assert.deepEqual(windows,[7,7,7]);assert.equal(report.tasks.length,1);assert.equal(report.tasks[0].due.start,'2027-01-01');assert.equal((await service.state()).settings.emailLookbackDays,7);
+ await assert.rejects(()=>service.setEmailWindow({days:365}),/Choose/);
+});

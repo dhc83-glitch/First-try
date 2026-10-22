@@ -4,6 +4,10 @@ A local app being developed into a repeatable personal assistant. It reads Notio
 
 ## One-button refresh
 
+Email reading now defaults to the **last 14 days of current-INBOX messages**, not the entire mailbox history. The dashboard lets you choose 7, 14, or 30 days while catch-up is stopped. Gmail receives an absolute received-time cutoff, held fixed across the batches of one scan. Changing the window discards the old listing cursor and starts a scoped inventory; older cached emails are excluded from the active review queue. A resumed scan more than a day old starts a fresh inventory with recent cached bodies retained. No email is deleted or archived in Gmail. All current Central Tasks are still fetched independently of the email window, including tasks created long ago with upcoming deadlines. New tasks mentioned only in older email will not be discovered by this window.
+
+Changing this local setting does not perform a Notion write. Stop the active job first, save the window, and click Refresh. Previously saved decisions, task records, and Gmail connections are preserved. Email history that is no longer in the active window may be pruned from the local message cache; it is not deleted from Gmail.
+
 ### Cleanup review and remembered decisions
 
 After a refresh, **Cleanup and remembered decisions** shows the New York date, past-event/exam review candidates, cancellations mentioned in task notes, result-check reminders, and repeated daily internship goals. These are deterministic heuristics, not an AI understanding of email. An overdue assignment remains unresolved; a past date never proves completion. No task is changed merely because it appears here.

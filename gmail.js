@@ -95,13 +95,15 @@ export class Gmail {
       throw error;
     }
   }
-  async readInbox(slot,previous=[],onProgress=async()=>{},savedScan=null,{reuseComplete=false}={}){
+  async readInbox(slot,previous=[],onProgress=async()=>{},savedScan=null,{reuseComplete=false,lookbackDays=14}={}){
+    if(![7,14,30].includes(lookbackDays))throw new Error('Choose a 7, 14, or 30 day email window.');
     const v=await this.vault.read(),account=v.accounts?.[slot];
     if(!account)return {slot,status:'not connected',messages:[],canContinue:false};
-    const existing=new Map(previous.filter(m=>m.email===account.email).map(m=>[m.id,m]));
-    let scan=savedScan?.email===account.email?structuredClone(savedScan):null;
+    let scan=savedScan?.email===account.email&&savedScan.lookbackDays===lookbackDays?structuredClone(savedScan):null;
+    if(!reuseComplete&&scan&&this.now()-Date.parse(scan.startedAt)>=86400000)scan=null;
+    if(!scan||(!reuseComplete&&scan.complete))scan={email:account.email,lookbackDays,cutoffMs:this.now()-lookbackDays*86400000,startedAt:new Date(this.now()).toISOString(),pageToken:null,listed:false,pendingIds:[],seenIds:[],complete:false,paused:false};
+    const existing=new Map(previous.filter(m=>m.email===account.email&&Date.parse(m.receivedAt)>=scan.cutoffMs).map(m=>[m.id,m]));
     if(reuseComplete&&scan&&(scan.complete||scan.paused))return {slot,email:account.email,status:scan.complete?'checked':'incomplete',messages:[...existing.values()],count:existing.size,canContinue:false,detail:scan.detail||'Current inbox scan finished.'};
-    if(!scan||scan.complete)scan={email:account.email,startedAt:new Date().toISOString(),pageToken:null,listed:false,pendingIds:[],seenIds:[],complete:false,paused:false};
     scan.paused=false;
     let access=this.access.get(slot);
     if(!access||access.expires<Date.now()+60000){const t=await this.token({grant_type:'refresh_token',refresh_token:account.refreshToken});access={token:t.access_token,expires:Date.now()+(t.expires_in||3600)*1000};this.access.set(slot,access);}
@@ -124,7 +126,7 @@ export class Gmail {
       }
       if(scan.listed&&!scan.pageToken)break;
       try{
-        const params=new URLSearchParams({labelIds:'INBOX',maxResults:'100',...(scan.pageToken?{pageToken:scan.pageToken}:{})});
+        const params=new URLSearchParams({labelIds:'INBOX',q:'after:'+Math.floor(scan.cutoffMs/1000),maxResults:'100',...(scan.pageToken?{pageToken:scan.pageToken}:{})});
         const page=await this.get('/messages?'+params,access.token);pages++;
         if(page.nextPageToken&&page.nextPageToken===scan.pageToken)throw new Error('Gmail pagination did not advance.');
         for(const message of page.messages||[]){if(!seen.has(message.id)){seen.add(message.id);scan.pendingIds.push(message.id);}}
@@ -139,7 +141,7 @@ export class Gmail {
     scan.complete=scan.listed&&!scan.pageToken&&scan.pendingIds.length===0;
     if(scan.complete){for(const id of existing.keys())if(!seen.has(id))existing.delete(id);}
     const remaining=scan.pendingIds.filter(id=>!existing.has(id)).length;
-    scan.detail=[errorDetail,`${existing.size} emails saved.`,scan.complete?'All pages of this inbox scan have been read.':`${remaining} pending emails on listed pages${scan.pageToken?'; additional inbox pages remain':''}.`,scan.paused?'Catch-up paused. Progress was kept; click Refresh to retry.':!scan.complete?'Automatic catch-up can continue from this point.':'','Current INBOX only; archived mail, spam, trash, and attachments are outside this check.'].filter(Boolean).join(' ');
+    scan.detail=[errorDetail,`Last ${lookbackDays} days of inbox email (from ${new Date(scan.cutoffMs).toISOString()}).`,`${existing.size} emails saved.`,scan.complete?'All pages in this recent-email window have been read.':`${remaining} pending emails on listed pages${scan.pageToken?'; additional recent-email pages remain':''}.`,scan.paused?'Catch-up paused. Progress was kept; click Refresh to retry.':!scan.complete?'Automatic catch-up can continue from this point.':'','Older email, archived mail, spam, trash, and attachments are outside this check. All current Notion tasks are checked separately.'].filter(Boolean).join(' ');
     await checkpoint();
     return {slot,email:account.email,status:scan.complete?'checked':'incomplete',messages:[...existing.values()],count:existing.size,canContinue:!scan.complete&&!scan.paused,detail:scan.detail};
   }

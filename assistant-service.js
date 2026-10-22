@@ -16,7 +16,13 @@ const pendingSources=(state,continuing)=>[
 ];
 export class Assistant {
   constructor({notion,store,sourceId,gmail,clock=()=>new Date()}){Object.assign(this,{notion,store,sourceId,gmail,clock});this.busy=false;}
-  async state(){const s=await this.store.read();return {latest:s.latest,history:s.history,operations:s.operations||[],configured:!!this.notion};}
+  async state(){const s=await this.store.read();return {latest:s.latest,history:s.history,operations:s.operations||[],settings:{emailLookbackDays:s.settings?.emailLookbackDays||14},configured:!!this.notion};}
+  async setEmailWindow({days}){
+    if(this.busy)throw new Error('Stop the refresh and wait for its current batch first.');
+    if(![7,14,30].includes(days))throw new Error('Choose 7, 14, or 30 days.');
+    this.busy=true;
+    try{const state=await this.store.read();state.settings={...state.settings,emailLookbackDays:days};if(state.latest)state.latest.needsRefresh=true;state.homePreview=null;await this.store.write(state);return {saved:true,days};}finally{this.busy=false;}
+  }
   async refresh({continueCatchup=false,taskOnly=false}={}){
     if(this.busy)throw new Error('A refresh or update is already running. Wait for it to finish.');
     this.busy=true;
@@ -34,7 +40,8 @@ export class Assistant {
         const snapshot=structuredClone(state);
         checkpoint=checkpoint.then(()=>this.store.write(snapshot));return checkpoint;
       };
-      const reads=await Promise.allSettled([readCentral(this.notion,state.sourceId||this.sourceId),...slots.map(slot=>taskOnly?Promise.resolve({slot,status:'cached',messages:state.mailRecords[slot]||[],count:state.mailRecords[slot]?.length||0,detail:'Email was not rechecked in this Notion-only refresh; showing saved records.'}):this.gmail?this.gmail.readInbox(slot,state.mailRecords[slot]||[],(messages,scan)=>saveProgress(slot,messages,scan),state.mailScans[slot],{reuseComplete:continueCatchup}):Promise.resolve({slot,status:'not connected',messages:[]}))]);
+      const lookbackDays=state.settings?.emailLookbackDays||14;
+      const reads=await Promise.allSettled([readCentral(this.notion,state.sourceId||this.sourceId),...slots.map(slot=>taskOnly?Promise.resolve({slot,status:'cached',messages:state.mailRecords[slot]||[],count:state.mailRecords[slot]?.length||0,detail:'Email was not rechecked in this Notion-only refresh; showing saved records.'}):this.gmail?this.gmail.readInbox(slot,state.mailRecords[slot]||[],(messages,scan)=>saveProgress(slot,messages,scan),state.mailScans[slot],{reuseComplete:continueCatchup,lookbackDays}):Promise.resolve({slot,status:'not connected',messages:[]}))]);
       await checkpoint;
       state.mailRecords||={};const mailSources=[];
       for(let i=0;i<slots.length;i++){
@@ -51,7 +58,7 @@ export class Assistant {
       const issues=auditCentral(result.tasks,now),plan=buildPlan(result.tasks.filter(t=>!cleanup.heldTaskIds.includes(t.id)),now);
       plan.assumptions[2]='External calendar is not connected. Only commitments recorded in Central Tasks reserve time. Email-derived tasks require your review before creation.';
       const successfulSlots=new Set(slots.filter((slot,i)=>reads[i+1].status==='fulfilled'&&['checked','incomplete','cached'].includes(reads[i+1].value.status)));
-      const inboxReview=Object.entries(state.mailRecords).filter(([slot])=>successfulSlots.has(slot)).flatMap(([,records])=>records).filter(m=>!state.mailDecisions?.[m.key]).map(m=>({...m,rememberedDecisions:matchingDecisions(m.subject,state.taskDecisions)}));
+      const inboxReview=Object.entries(state.mailRecords).filter(([slot])=>successfulSlots.has(slot)).flatMap(([,records])=>records).filter(m=>!state.mailDecisions?.[m.key]&&(!m.receivedAt||Date.parse(m.receivedAt)>=+now-lookbackDays*86400000)).map(m=>({...m,rememberedDecisions:matchingDecisions(m.subject,state.taskDecisions)}));
       const report={...run,status:result.warnings.length===0&&mailSources.every(s=>s.status==='checked')?'complete':'partial',finishedAt:this.clock().toISOString(),sources:[{name:'Central Tasks',status:'checked',count:result.tasks.length},...mailSources,run.sources.at(-1)],warnings:result.warnings,tasks:result.tasks,issues,plan,cleanup,inboxReview,changes:changesSince(state.baseline?.tasks,result.tasks),notionChecked:true};
       const next={...state,sourceId:result.sourceId,baseline:{checkedAt:report.finishedAt,tasks:result.tasks},latest:report,history:[{id:report.id,status:report.status,startedAt:report.startedAt,finishedAt:report.finishedAt,taskCount:result.tasks.length,issueCount:issues.length},...state.history].slice(0,30)};
       await this.store.write(next);return report;

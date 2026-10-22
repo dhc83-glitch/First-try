@@ -31,6 +31,7 @@ export const isDailyGoal=t=>/^\s*apply\s+(?:to\s+)?(?:at\s+least\s+)?(?:2|two)\s
 
 export function automaticCleanup(tasks,decisions={},now=new Date()){
   const today=localParts(now,'America/New_York').day,actions=[],exceptions=[];
+  for(const t of tasks)if(t.done&&['To do','In progress','Waiting','Inbox'].includes(t.status))actions.push({taskId:t.id,action:'done',note:'The Done checkbox was already checked. Aligned the status and removed obsolete planned dates.'});
   for(const t of tasks.filter(isActive)){
     const remembered=decisions[t.id];
     if(remembered){
@@ -44,8 +45,27 @@ export function automaticCleanup(tasks,decisions={},now=new Date()){
     // Only narrow event reminders qualify. Never infer an assignment, grade,
     // application, payment, or exam completion from a date.
     const reminder=/\b(class|lecture|soccer pickup|umpiring game|game reminder)\b/i.test(t.title);
-    const followup=/\b(assignment|homework|quiz|exam|grade|score|result|payment|invoice|application|follow[ -]?up|confirm|reply|waiting)\b/i.test(t.title+' '+t.notes);
-    if(past&&reminder&&!followup)actions.push({taskId:t.id,action:'done',note:'Past dated event reminder resolved automatically. This closes the reminder only; it does not assert attendance, a grade, or completion of related work.'});
+    const followup=/\b(assignment|homework|quiz|exam|grade|score|result|payment|invoice|application|follow[ -]?up|confirm|reply|waiting)\b/i.test(t.title);
+    const pastQuizEvent=t.kind==='Fixed commitment'&&/\b(quiz|exam|midterm|final)\b/i.test(t.title)&&!/\b(prep|study|review|practice|assignment|homework)\b/i.test(t.title);
+    if(past&&(reminder&&!followup||pastQuizEvent))actions.push({taskId:t.id,action:'cancel',note:'Past dated event reminder expired and was removed from active work. Attendance, a grade, and completion of related work are not assumed. Separate study and result follow-ups remain unresolved.'});
   }
   return {actions,exceptions};
+}
+
+export const hasReportedScore=text=>/\b(?:score|grade|result)\s*(?:(?:is|was|of|known|confirmed|received|recorded)\s*){0,3}(?:by\s+[^:.\n\d]{1,60}:\s*|[:=]\s*)?\d{1,3}(?:\.\d+)?\s*(?:%|\/\s*\d{1,3})?(?=[.\s,;]|$)/i.test(text||'');
+
+export function taskTitleCorrections(tasks){
+  const corrections=[];
+  for(const task of tasks){
+    let title=task.title;
+    if(task.done&&hasReportedScore(task.notes))title=title.replace(/score (?:awaiting capture|to capture)/i,'score recorded');
+    const match=title.match(/\s+[—–-]\s+(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)$/i);
+    if(match&&task.kind!=='Fixed commitment'&&task.doDate?.start){
+      const date=task.doDate.start.length===10?task.doDate.start+'T12:00:00Z':task.doDate.start;
+      const weekday=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',weekday:'long'}).format(new Date(date));
+      if(match[1].toLowerCase()!==weekday.toLowerCase())title=title.slice(0,match.index);
+    }
+    if(title!==task.title)corrections.push({taskId:task.id,title});
+  }
+  return corrections;
 }

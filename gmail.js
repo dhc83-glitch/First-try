@@ -1,5 +1,6 @@
 import {randomBytes,createHash} from 'node:crypto';
 import {Store} from './store.js';
+import {isCorrespondenceTask,followupTokens} from './correspondence.js';
 
 export const inboxSlots=['personal','school','professional'];
 const GOOGLE_AUTH='https://accounts.google.com/o/oauth2/v2/auth';
@@ -35,7 +36,7 @@ export function messageRecord(message,slot,email){
   function content(part){if(part.mimeType==='text/plain'&&part.body?.data)return decode(part.body.data);return (part.parts||[]).map(content).filter(Boolean).join('\n');}
   const text=content(message.payload||{});
   const newsletter=!!headers['list-unsubscribe'];
-  return {id:message.id,key:`gmail:${email.toLowerCase()}:${message.id}`,slot,email,subject:headers.subject||'(No subject)',from:headers.from||'',receivedAt:new Date(Number(message.internalDate)||Date.now()).toISOString(),snippet:message.snippet||'',body:text.slice(0,10000),bodyTruncated:text.length>10000,bodyUnavailable:!text,category:newsletter?'Newsletter':slot==='school'?'School':slot==='professional'?'Career':'Personal',reviewNeeded:true,attachmentNotice:'Attachments are not read. Confirm dates and details against the original email.'};
+  return {id:message.id,threadId:message.threadId,labels:message.labelIds||[],to:headers.to||'',messageId:headers['message-id']||'',inReplyTo:headers['in-reply-to']||'',key:`gmail:${email.toLowerCase()}:${message.id}`,slot,email,subject:headers.subject||'(No subject)',from:headers.from||'',receivedAt:new Date(Number(message.internalDate)||Date.now()).toISOString(),snippet:message.snippet||'',body:text.slice(0,10000),bodyTruncated:text.length>10000,bodyUnavailable:!text,category:newsletter?'Newsletter':slot==='school'?'School':slot==='professional'?'Career':'Personal',reviewNeeded:true,attachmentNotice:'Attachments are not read. Confirm dates and details against the original email.'};
 }
 
 // OAuth tokens are server-only, in an ignored, owner-readable local file.
@@ -94,6 +95,36 @@ export class Gmail {
       if((error.rateLimited||error.httpStatus>=500)&&attempt<3)continue;
       throw error;
     }
+  }
+  async readCorrespondence(tasks,{lookbackDays=14}={}){
+    const targets=tasks.filter(isCorrespondenceTask).filter(t=>followupTokens(t).length);
+    const selected=targets.slice(0,12),vault=await this.vault.read(),threads=new Map(),coverage=[];
+    const cutoff=Math.floor((this.now()-lookbackDays*86400000)/1000);
+    for(const slot of inboxSlots){
+      const account=vault.accounts?.[slot];
+      if(!account){coverage.push({slot,status:'not connected'});continue;}
+      try{
+        let access=this.access.get(slot);
+        if(!access||access.expires<Date.now()+60000){const t=await this.token({grant_type:'refresh_token',refresh_token:account.refreshToken});access={token:t.access_token,expires:Date.now()+(t.expires_in||3600)*1000};this.access.set(slot,access);}
+        let partial=false,read=0;
+        for(const task of selected){
+          const terms=followupTokens(task).slice(0,4);
+          const query='after:'+cutoff+' {'+terms.map(t=> '"'+t+'"').join(' ')+'}';
+          const listing=await this.get('/messages?'+new URLSearchParams({q:query,maxResults:'10'}),access.token);
+          partial ||= !!listing.nextPageToken;
+          for(const message of listing.messages||[]){
+            const key=account.email.toLowerCase()+':'+message.threadId;
+            if(!message.threadId||threads.has(key))continue;
+            if(read>=24){partial=true;break;}
+            const thread=await this.get('/threads/'+encodeURIComponent(message.threadId)+'?format=full',access.token);read++;
+            const messages=(thread.messages||[]).map(m=>messageRecord(m,slot,account.email));
+            threads.set(key,{id:thread.id,slot,email:account.email,complete:!thread.nextPageToken,messages});
+          }
+        }
+        coverage.push({slot,status:partial||selected.length<targets.length?'incomplete':'checked',threadsRead:read});
+      }catch(error){coverage.push({slot,status:'failed',detail:gmailFailureDetail(error)});}
+    }
+    return {conversations:[...threads.values()],coverage,taskCount:selected.length,totalCandidates:targets.length,lookbackDays};
   }
   async readInbox(slot,previous=[],onProgress=async()=>{},savedScan=null,{reuseComplete=false,lookbackDays=14}={}){
     if(![7,14,30].includes(lookbackDays))throw new Error('Choose a 7, 14, or 30 day email window.');

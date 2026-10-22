@@ -1,13 +1,13 @@
 const API='https://api.notion.com/v1';
 export class Notion {
-  constructor(token, fetcher=fetch, {sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms)),readTimeoutMs=15000,writeTimeoutMs=30000}={}){Object.assign(this,{token,fetcher,sleep,readTimeoutMs,writeTimeoutMs});}
+  constructor(token, fetcher=fetch, {sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms)),readTimeoutMs=15000,writeTimeoutMs=30000,requestIntervalMs=fetcher===fetch?350:0}={}){Object.assign(this,{token,fetcher,sleep,readTimeoutMs,writeTimeoutMs,requestIntervalMs});this.queue=Promise.resolve();this.nextRequestAt=0;}
   async call(path,method='GET',body){
     // Notion search and data-source queries use POST but are read-only.
     const readOnly=method==='GET'||(method==='POST'&&(path==='/search'||/^\/data_sources\/[^/]+\/query$/.test(path)));
     for(let attempt=0;attempt<3;attempt++){
       let res;
       try{
-        res=await this.fetcher(API+path,{method,headers:{Authorization:`Bearer ${this.token}`,'Notion-Version':'2025-09-03','Content-Type':'application/json'},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(readOnly?this.readTimeoutMs:this.writeTimeoutMs)});
+        const request=this.queue.then(async()=>{const wait=this.nextRequestAt-Date.now();if(wait>0)await this.sleep(wait);this.nextRequestAt=Date.now()+this.requestIntervalMs;return this.fetcher(API+path,{method,headers:{Authorization:`Bearer ${this.token}`,'Notion-Version':'2025-09-03','Content-Type':'application/json'},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(readOnly?this.readTimeoutMs:this.writeTimeoutMs)});});this.queue=request.then(()=>{},()=>{});res=await request;
       }catch(error){
         if(readOnly&&attempt<2&&['TimeoutError','AbortError','TypeError'].includes(error.name)){await this.sleep(500*2**attempt);continue;}
         if(['TimeoutError','AbortError'].includes(error.name))throw new Error(readOnly?'Notion took too long to respond after bounded read retries. Saved progress was kept.':'Notion did not confirm this write before the timeout. Its outcome must be verified before retrying.');

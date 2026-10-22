@@ -16,7 +16,7 @@ export class RefreshJob {
         const report=await this.assistant.refresh({continueCatchup:this.current.rounds>0});
         this.current.rounds++;
         if(!report.sources.some(s=>s.canContinue)){
-          if(typeof this.assistant.applyAutomatic==='function'&&!this.stopRequested){this.current.phase='updating Notion';this.current.automatic=await this.assistant.applyAutomatic();}
+          if(typeof this.assistant.applyAutomatic==='function'&&!this.stopRequested){this.current.phase='updating Notion';this.current.automatic=await this.assistant.applyAutomatic({onPhase:phase=>{this.current.phase=phase;}});}
           this.current.status=this.current.automatic?.exceptions?.length?'needs attention':report.status==='complete'?'complete':'paused';break;
         }
         // Yield between bounded batches; Gmail's shared gate controls API pacing.

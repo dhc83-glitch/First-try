@@ -35,3 +35,8 @@ test('permanent permission failures are not retried and read timeouts stop after
  calls=0;const timeout=new Notion('private',async()=>{calls++;throw new DOMException('Timed out','TimeoutError');},{sleep:async()=>{}});
  await assert.rejects(()=>timeout.call('/blocks/home'),/bounded read retries/);assert.equal(calls,3);
 });
+test('parallel Notion calls share one queue rather than issuing overlapping requests',async()=>{
+ let active=0,maxActive=0,release;const gate=new Promise(r=>release=r);let calls=0;
+ const client=new Notion('private',async()=>{calls++;active++;maxActive=Math.max(maxActive,active);if(calls===1)await gate;active--;return Response.json({ok:true});});
+ const first=client.call('/blocks/one'),second=client.call('/blocks/two');await Promise.resolve();release();await Promise.all([first,second]);assert.equal(maxActive,1);assert.equal(calls,2);
+});

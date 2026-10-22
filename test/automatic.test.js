@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Assistant} from '../assistant-service.js';
 import {Store} from '../store.js';
-import {interpretUpdate,automaticCleanup} from '../automatic.js';
+import {interpretUpdate,automaticCleanup,taskTitleCorrections,hasReportedScore} from '../automatic.js';
 import {RefreshJob} from '../refresh-job.js';
 const now=new Date('2026-10-22T18:00:00Z');
 const task=(id,title,extra={})=>({id,title,status:'To do',done:false,notes:'',schedules:[],...extra});
@@ -54,7 +54,7 @@ test('one Refresh job applies supplied facts, closes past reminders, reuses dail
  await f.service.saveUpdate({text:'Cancel "Example trial": canceled'});
  const job=new RefreshJob(f.service);job.start();await job.done;assert.equal(job.current.status,'complete');
  const status=id=>f.pages.get(id).properties.Status.select.name;
- assert.equal(status('class'),'Done');assert.equal(status('quiz'),'To do');assert.equal(status('grade'),'Done');assert.equal(status('trial'),'Canceled');assert.equal(status('duplicate'),'Canceled');assert.equal(f.creates(),0);
+ assert.equal(status('class'),'Canceled');assert.equal(status('quiz'),'To do');assert.equal(status('grade'),'Done');assert.equal(status('trial'),'Canceled');assert.equal(status('duplicate'),'Canceled');assert.equal(f.creates(),0);
  assert.match(f.blocks.get('heading').callout.rich_text[0].text.content,/Thursday, October 22/);
  assert.equal((await f.store.read()).updates.every(u=>u.status==='applied'),true);
  const firstWrites=f.writes.filter(p=>p.startsWith('/pages/')).length;
@@ -97,4 +97,21 @@ test('an explicit cancellation stops daily-goal reopening on later days',async t
  await f.service.saveUpdate({text:'Cancel "Apply to at least 2 internships": stopping this routine'});
  await f.service.refresh();await f.service.applyAutomatic();assert.equal(f.pages.get('daily').properties.Status.select.name,'Canceled');
  f.setTime(new Date('2026-10-23T18:00:00Z'));await f.service.refresh();await f.service.applyAutomatic();assert.equal(f.pages.get('daily').properties.Status.select.name,'Canceled');
+});
+test('a verified email conversation completes its confirmation before rebuilding Home, while its future event remains active',async t=>{
+ const f=await fixture(t,[task('confirm','Confirm Exampleco campus attendance',{status:'Waiting'}),task('event','Attend Exampleco campus event',{kind:'Fixed commitment',start:{start:'2026-10-28T18:00:00Z'}})]);
+ f.service.gmail.readCorrespondence=async()=>({coverage:[{slot:'professional',status:'checked'}],conversations:[{id:'thread',slot:'professional',email:'me@example.com',complete:true,messages:[{id:'sent',messageId:'<sent>',from:'me@example.com',to:'host@exampleco.com',subject:'Exampleco campus event',labels:['SENT'],body:'I confirm my attendance.',receivedAt:'2026-10-21T12:00:00Z'},{id:'ack',inReplyTo:'<sent>',from:'host@exampleco.com',to:'me@example.com',subject:'Exampleco campus event',body:'Thank you for confirming. See you there!',receivedAt:'2026-10-21T13:00:00Z'}]}]});
+ await f.service.refresh();const result=await f.service.applyAutomatic();assert.equal(result.emailCompletions,1);assert.equal(f.pages.get('confirm').properties.Status.select.name,'Done');assert.equal(f.pages.get('event').properties.Status.select.name,'To do');assert.equal((await f.store.read()).correspondenceEvidence.confirm.replyId,'ack');
+ await f.service.refresh();const repeat=await f.service.applyAutomatic();assert.equal(repeat.emailCompletions,0);
+});
+test('checked completion and stale planning-only titles are reconciled against their source fields',async t=>{
+ const f=await fixture(t,[task('checked','Reply to example contact',{done:true}),task('room','Room reset — Wednesday',{doDate:{start:'2026-10-23'}}),task('result','Example exam — graded; score awaiting capture',{status:'Done',done:true,notes:'Exam score is 73.'})]);
+ await f.service.refresh();const result=await f.service.applyAutomatic();assert.equal(f.pages.get('checked').properties.Status.select.name,'Done');assert.equal(f.pages.get('room').properties['Task name'].title[0].text.content,'Room reset');assert.match(f.pages.get('result').properties['Task name'].title[0].text.content,/score recorded/);assert.equal(result.renamedTasks,2);
+});
+
+test('dates and missing-score notices never count as reported grades',()=>{
+ assert.equal(hasReportedScore('Grade/comments released Oct 14. Score is not included in the email.'),false);
+ assert.ok(hasReportedScore('Exam 1 score confirmed by the student: 73.'));
+ assert.ok(hasReportedScore('Exam score is 82.'));
+ assert.equal(taskTitleCorrections([task('unknown','Quiz — score to capture',{done:true,status:'Done',notes:'Grade/comments released Oct 14. Score is not included in the email.'})]).length,0);
 });

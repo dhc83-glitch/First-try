@@ -4,8 +4,10 @@ import {localParts} from './audit.js';
 import {gmailFailureDetail} from './gmail.js';
 import {cleanupReview,matchingDecisions} from './cleanup.js';
 import {previewHome} from './home-summary.js';
+import {homeValue,homeValueEqual} from './home-content.js';
+import {completionCandidates} from './correspondence.js';
 import {rich} from './notion.js';
-import {interpretUpdate,automaticCleanup,isDailyGoal} from './automatic.js';
+import {interpretUpdate,automaticCleanup,isDailyGoal,taskTitleCorrections} from './automatic.js';
 const batchApproval=Symbol('authorized routine update');
 const retainOperations=operations=>operations.filter((op,index)=>index<50||op.status!=='verified');
 
@@ -14,7 +16,7 @@ const pendingSources=(state,continuing)=>[
     const scan=state.mailScans?.[slot],complete=continuing&&scan?.complete;
     return {name:slot[0].toUpperCase()+slot.slice(1)+' inbox',status:complete?'checked':'waiting',count:state.mailRecords?.[slot]?.length,detail:complete?'This inbox finished earlier in this catch-up.':'Waiting for the current batch result; this does not mean the connection is missing.'};
   }),
-  {name:'External calendar (optional)',status:'not connected',optional:true,detail:'Only commitments stored in Central Tasks are checked.'}
+  {name:'Notion Calendar task dates',status:'waiting',optional:true,detail:'Dates in Central Tasks are included. Google Calendar events and other Notion databases are outside this check.'}
 ];
 export class Assistant {
   constructor({notion,store,sourceId,gmail,clock=()=>new Date()}){Object.assign(this,{notion,store,sourceId,gmail,clock});this.busy=false;}
@@ -25,8 +27,9 @@ export class Assistant {
     this.busy=true;
     try{const state=await this.store.read();if((state.updates||[]).some(u=>u.status==='pending'&&u.text===text.trim()))return {saved:true,alreadyQueued:true};state.updates=[...(state.updates||[]),{id:randomUUID(),text:text.trim(),status:'pending',at:this.clock().toISOString()}];await this.store.write(state);return {saved:true};}finally{this.busy=false;}
   }
-  async applyAutomatic(){
-    const summary={at:this.clock().toISOString(),closedReminders:0,appliedUpdates:0,scheduled:0,dailyGoalUpdates:0,homeUpdated:false,exceptions:[]};
+  async applyAutomatic({onPhase=()=>{}}={}){
+    onPhase("Applying saved updates");
+    const summary={at:this.clock().toISOString(),closedReminders:0,appliedUpdates:0,scheduled:0,dailyGoalUpdates:0,homeUpdated:false,emailCompletions:0,renamedTasks:0,exceptions:[]};
     const initial=await this.store.read(),coverage=initial.latest?.sources,coverageStatus=initial.latest?.status;
     if(!initial.latest?.tasks||initial.latest.status==='failed')return {...summary,exceptions:[{reason:'No successful Notion read is available.'}]};
     for(const op of initial.operations||[])if(op.status!=='verified')summary.exceptions.push({taskId:op.taskId,title:op.title,reason:'An earlier Notion write needs verification; automatic retry is blocked.'});
@@ -52,6 +55,25 @@ export class Assistant {
       }catch(error){summary.exceptions.push({updateId:update.id,title:parsed.title,reason:error.message});await this.recordUpdateOutcome(update.id,'needs verification',error.message);}
     }
     await this.refresh({taskOnly:true});
+    if(typeof this.gmail?.readCorrespondence==='function'){
+      onPhase('Checking sent email and replies');
+      try{
+        const snapshot=await this.store.read();
+        const correspondence=await this.gmail.readCorrespondence(snapshot.latest.tasks,{lookbackDays:snapshot.settings?.emailLookbackDays||14});
+        summary.correspondence=correspondence.coverage;
+        for(const source of correspondence.coverage)if(source.status!=='checked')summary.exceptions.push({reason:source.slot+' follow-up conversation check: '+source.status+(source.detail?' — '+source.detail:'')});
+        const proofs=completionCandidates(snapshot.latest.tasks,correspondence.conversations,this.clock());
+        for(const {task,evidence}of proofs){
+          try{
+            const s=await this.store.read();
+            await this.resolveTask({taskId:task.id,action:'done',note:('Email proof: '+evidence.subject+'; sent '+evidence.sentAt+'; acknowledged '+evidence.replyAt+'. Sent: '+evidence.sentExcerpt+' | Response: '+evidence.replyExcerpt).slice(0,1000),confirmed:true},{authorization:batchApproval,runId:s.latest.id,origin:'sent confirmation and direct acknowledgement'});
+            const state=await this.store.read();state.correspondenceEvidence||={};state.correspondenceEvidence[task.id]=evidence;await this.store.write(state);summary.emailCompletions++;
+          }catch(error){summary.exceptions.push({taskId:task.id,title:task.title,reason:error.message});}
+        }
+        await this.refresh({taskOnly:true});
+      }catch(error){summary.exceptions.push({reason:'Follow-up conversation check failed: '+gmailFailureDetail(error)});}
+    }
+    onPhase('Reconciling task records');
     const current=await this.store.read(),policy=automaticCleanup(current.latest.tasks,current.taskDecisions,this.clock());
     summary.exceptions.push(...policy.exceptions);
     const outstanding=(await this.store.read()).updates?.filter(u=>['needs information','needs verification'].includes(u.status))||[];
@@ -60,6 +82,7 @@ export class Assistant {
       try{await this.resolveTask({...action,confirmed:true},{authorization:batchApproval,runId:current.latest.id,origin:'automatic reminder policy'});summary.closedReminders++;}
       catch(error){summary.exceptions.push({taskId:action.taskId,reason:error.message});}
     }
+    for(const correction of taskTitleCorrections(current.latest.tasks)){try{await this.renameTask(correction);summary.renamedTasks++;}catch(error){summary.exceptions.push({taskId:correction.taskId,reason:error.message});}}
     try{summary.dailyGoalUpdates=await this.maintainDailyGoal();}catch(error){summary.exceptions.push({reason:'Daily goal: '+error.message});}
     await this.refresh({taskOnly:true});
     // Scheduling is deferred when inbox coverage or your explicit instructions are incomplete.
@@ -68,7 +91,7 @@ export class Assistant {
       const blocked=new Set([...state.latest.cleanup.items.map(i=>i.taskId),...(state.operations||[]).filter(o=>o.status!=='verified').map(o=>o.taskId)]);
       // Reading email is not semantic triage. Do not reserve time while email
       // commitments have not been reconciled by the unfinished decision engine.
-      if(state.latest.inboxReview.length)summary.exceptions.push({reason:'Email was collected, but automatic email-to-task reconciliation is still being built. Work times remain suggestions.'});
+      if(state.latest.inboxReview.length)summary.exceptions.push({reason:'Recent email was collected. Reply/confirmation evidence is checked separately; general email-to-task reconciliation is still being built. Work times remain suggestions.'});
       for(const proposal of state.latest.plan.proposals.filter(p=>!summary.exceptions.length&&!blocked.has(p.taskId))){
         try{await this.approve(proposal.id,true,{authorization:batchApproval,runId:state.latest.id});summary.scheduled++;}
         catch(error){summary.exceptions.push({taskId:proposal.taskId,title:proposal.title,reason:error.message});break;}
@@ -79,7 +102,8 @@ export class Assistant {
     try{
       const pendingHome=state.operations?.find(o=>o.title==='Update Home dated task summary');
       if(pendingHome&&pendingHome.status!=='verified')throw new Error('An earlier Home update needs verification; it will not be overwritten automatically.');
-      const preview=await this.homePreview();await this.approveHome({previewId:preview.id,confirmed:true});summary.homeUpdated=true;}catch(error){summary.exceptions.push({reason:'Home summary: '+error.message});}
+      onPhase('Updating Home sections');
+      const preview=await this.homePreview();await this.approveHome({previewId:preview.id,confirmed:true});summary.homeUpdated=true;summary.homeBlocksUpdated=preview.changes.length;summary.homeSections=preview.coverage;summary.homeWarnings=preview.warnings;}catch(error){summary.exceptions.push({reason:'Home summary: '+error.message});}
     state=await this.store.read();state.automatic=summary;state.latest.automatic=summary;await this.store.write(state);return summary;
   }
   async recordUpdateOutcome(id,status,detail){const state=await this.store.read();const update=state.updates?.find(u=>u.id===id);if(update){update.status=status;update.detail=detail;await this.store.write(state);}}
@@ -147,6 +171,18 @@ export class Assistant {
       fresh.latest.needsRefresh=true;await this.store.write(fresh);return changed+1;
     }catch{operation.status='needs verification';await this.store.write(fresh);throw new Error('Daily-goal update needs verification; no completion was assumed.');}
   }
+  async renameTask({taskId,title}){
+    const state=await this.store.read(),task=state.latest?.tasks?.find(t=>t.id===taskId);
+    if(!task||typeof title!=='string'||!title.trim()||title.length>200)throw new Error('A current task and valid title are required.');
+    const page=await this.notion.call('/pages/'+taskId);
+    if(page.last_edited_time!==task.lastEdited||page.archived||page.in_trash)throw new Error('Task changed before its title correction.');
+    if((state.operations||[]).some(o=>o.taskId===taskId&&o.status!=='verified'))throw new Error('An earlier task write needs verification.');
+    const properties={'Task name':{title:[{text:{content:title}}]}};
+    const operation={id:randomUUID(),taskId,title,at:this.clock().toISOString(),action:'correct stale task title',before:page.properties,properties,status:'pending verification'};
+    state.operations=retainOperations([operation,...(state.operations||[])]);await this.store.write(state);
+    try{await this.notion.call('/pages/'+taskId,'PATCH',{properties});const verified=await this.notion.call('/pages/'+taskId);if(rich(verified.properties['Task name']?.title)!==title)throw new Error('Title verification failed');operation.status='verified';await this.store.write(state);}
+    catch{operation.status='needs verification';await this.store.write(state);throw new Error('Title correction needs verification; no automatic retry will occur.');}
+  }
   async setEmailWindow({days}){
     if(this.busy)throw new Error('Stop the refresh and wait for its current batch first.');
     if(![7,14,30].includes(days))throw new Error('Choose 7, 14, or 30 days.');
@@ -181,12 +217,12 @@ export class Assistant {
         mailSources.push({name,status:inbox.status,count:inbox.count,canContinue:inbox.canContinue===true,detail:inbox.detail||'Not checked. Connect this Gmail account in the app.'});
         if(['checked','incomplete'].includes(inbox.status))state.mailRecords[slot]=inbox.messages;
       }
-      run.sources=[{name:'Central Tasks',status:reads[0].status==='fulfilled'?'checked':'failed'},...mailSources,{name:'External calendar (optional)',status:'not connected',optional:true,detail:'Only commitments stored in Central Tasks are checked.'}];
+      run.sources=[{name:'Central Tasks',status:reads[0].status==='fulfilled'?'checked':'failed'},...mailSources,{name:'Notion Calendar task dates',status:reads[0].status==='fulfilled'?'checked':'failed',optional:true,detail:'Dates in Central Tasks are included. Google Calendar events and other Notion databases are outside this check.'}];
       if(reads[0].status==='rejected')throw reads[0].reason;
       const result=reads[0].value;
       const cleanup=cleanupReview(result.tasks,state.taskDecisions,now);
       const issues=auditCentral(result.tasks,now),plan=buildPlan(result.tasks.filter(t=>!cleanup.heldTaskIds.includes(t.id)),now);
-      plan.assumptions[2]='External calendar is not connected. Only commitments recorded in Central Tasks reserve time. Email-derived tasks require your review before creation.';
+      plan.assumptions[2]='Notion Calendar dates from Central Tasks reserve time. Google Calendar events and other databases are not read. General email-to-task creation still requires review.';
       const successfulSlots=new Set(slots.filter((slot,i)=>reads[i+1].status==='fulfilled'&&['checked','incomplete','cached'].includes(reads[i+1].value.status)));
       const inboxReview=Object.entries(state.mailRecords).filter(([slot])=>successfulSlots.has(slot)).flatMap(([,records])=>records).filter(m=>!state.mailDecisions?.[m.key]&&(!m.receivedAt||Date.parse(m.receivedAt)>=+now-lookbackDays*86400000)).map(m=>({...m,rememberedDecisions:matchingDecisions(m.subject,state.taskDecisions)}));
       const report={...run,status:result.warnings.length===0&&mailSources.every(s=>s.status==='checked')?'complete':'partial',finishedAt:this.clock().toISOString(),sources:[{name:'Central Tasks',status:'checked',count:result.tasks.length},...mailSources,run.sources.at(-1)],warnings:result.warnings,tasks:result.tasks,issues,plan,cleanup,inboxReview,changes:changesSince(state.baseline?.tasks,result.tasks),notionChecked:true};
@@ -319,18 +355,21 @@ export class Assistant {
       if(preview.date!==localParts(this.clock(),'America/New_York').day)throw new Error('The New York date changed. Refresh and generate a new Home preview.');
       for(const change of preview.changes){
         const current=await this.notion.call('/blocks/'+change.id);
-        if(current.type!==change.type||current.last_edited_time!==change.lastEdited||JSON.stringify(current[change.type].rich_text)!==JSON.stringify(change.before))throw new Error('Home was edited since the preview. Generate a new preview before approving.');
+        if(current.type!==change.type||current.last_edited_time!==change.lastEdited||JSON.stringify(homeValue(current,change.field||'rich_text'))!==JSON.stringify(change.before))throw new Error('Home was edited since the preview. Generate a new preview before approving.');
       }
-      const operation={id:randomUUID(),title:'Update Home dated task summary',at:this.clock().toISOString(),status:'pending verification',before:preview.changes.map(c=>({id:c.id,type:c.type,rich_text:c.before})),changes:preview.changes};
+      const operation={id:randomUUID(),title:'Update Home dated task summary',at:this.clock().toISOString(),status:'pending verification',before:preview.changes.map(c=>({id:c.id,type:c.type,field:c.field||'rich_text',value:c.before})),changes:preview.changes};
       state.operations=retainOperations([operation,...(state.operations||[])]);state.homePreview=null;await this.store.write(state);
       try{
+        operation.completedBlocks=[];
         for(const change of preview.changes){
-          await this.notion.call('/blocks/'+change.id,'PATCH',{[change.type]:{rich_text:change.after}});
+          operation.pendingBlock=change.id;await this.store.write(state);
+          await this.notion.call('/blocks/'+change.id,'PATCH',{[change.type]:{[change.field||'rich_text']:change.after}});
           const current=await this.notion.call('/blocks/'+change.id);
-          if(rich(current[change.type]?.rich_text)!==rich(change.after))throw new Error('Home verification failed');
+          if(!homeValueEqual(homeValue(current,change.field||'rich_text'),change.after,change.field||'rich_text'))throw new Error('Home verification failed');
+          operation.completedBlocks.push(change.id);operation.pendingBlock=null;await this.store.write(state);
         }
         operation.status='verified';await this.store.write(state);return {updated:true,verified:true};
-      }catch{operation.status='needs verification';await this.store.write(state);throw new Error('Home may be partially updated. Inspect its dated callout before trying again. The original text was retained in the private operation record.');}
+      }catch(error){operation.status='needs verification';operation.detail=error.message;await this.store.write(state);throw new Error('Home may be partially updated. Inspect the reported sections before trying again. The original text was retained in the private operation record.');}
     }finally{this.busy=false;}
   }
   async approve(proposalId,confirmed,batch){

@@ -83,3 +83,11 @@ test('a partial routine batch stops on uncertainty and retains verified earlier 
  await assert.rejects(()=>f.service.resolveRoutine({key:'daily-internship-applications',keeperId:'keep',confirmed:true}),/1 routine records verified/);
  const state=await f.store.read();assert.equal(state.taskDecisions.first.verified,true);assert.equal(state.taskDecisions.second.verified,false);assert.equal(uncertain,1);assert.equal(f.pages.get('keep').properties.Status.select.name,'To do');
 });
+test('Home table-row changes verify all cells and guard concurrent edits before writing',async t=>{
+ const f=await fixture(t,[]),state=await f.store.read();
+ const before=[[{text:{content:'Wednesday'}}],[{text:{content:'Old work'}}]],after=[[{text:{content:'Thursday'}}],[{text:{content:'Current work'}}]];
+ state.homePreview={id:'table-preview',runId:'run1',date:'2026-10-22',changes:[{id:'row',type:'table_row',field:'cells',lastEdited:'v1',before,after}]};await f.store.write(state);
+ const block={id:'row',type:'table_row',last_edited_time:'v1',table_row:{cells:structuredClone(before)}};let writes=0;
+ f.notion.call=async(path,method,body)=>{if(method==='PATCH'){writes++;block.table_row.cells=body.table_row.cells;}return structuredClone(block);};
+ assert.deepEqual(await f.service.approveHome({previewId:'table-preview',confirmed:true}),{updated:true,verified:true});assert.deepEqual(block.table_row.cells,after);assert.equal(writes,1);
+});

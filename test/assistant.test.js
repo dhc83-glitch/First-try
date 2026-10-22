@@ -35,7 +35,7 @@ test('durable refresh repeats safely, preserves baseline on failure, and reports
  const store=await fixture(t);let fail=false;
  const notion={source:async()=>schema,all:async()=>{if(fail)throw Error('unavailable');return [page()];}};
  const service=new Assistant({notion,store,sourceId,clock:()=>now});
- const first=await service.refresh();assert.equal(first.status,'partial');assert.equal(first.changes.firstRun,true);assert.equal(first.sources.filter(s=>s.status==='not connected').length,4);
+ const first=await service.refresh();assert.equal(first.status,'partial');assert.equal(first.changes.firstRun,true);assert.equal(first.sources.filter(s=>s.status==='not connected').length,3);
  const second=await service.refresh();assert.deepEqual(second.changes,{firstRun:false,added:[],changed:[],missing:[]});
  fail=true;await assert.rejects(()=>service.refresh(),/unavailable/);
  const saved=await store.read();assert.equal(saved.latest.status,'failed');assert.equal(saved.baseline.tasks.length,1);

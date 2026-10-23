@@ -1,5 +1,7 @@
+import {buildBriefing,findTasks,buildMoneyReview} from './briefing.js';
+import {createOrganizer} from './organizer-ui.js';
 const $=id=>document.getElementById(id);
-let config,sourceId,tasks=[],issues=[],selected,assistantMode=false,selectedPlan,selectedMail,jobRunning=false,pollTimer,selectedCleanup,selectedRoutine,homePreview;
+let briefingTasks=[],config,sourceId,tasks=[],issues=[],selected,assistantMode=false,selectedPlan,selectedMail,jobRunning=false,pollTimer,selectedCleanup,selectedRoutine,homePreview;
 const names={title:'Task title',status:'Status',due:'Due date',scheduled:'Scheduled date/time',category:'Category',priority:'Priority',notes:'Notes property'};
 const types={title:['title'],status:['status','select'],due:['date'],scheduled:['date'],category:['select','rich_text','multi_select'],priority:['select','status','rich_text'],notes:['rich_text']};
 const say=(text,error=false)=>{$('message').textContent=text;$('message').className=error?'error':'';};
@@ -31,7 +33,7 @@ $('editForm').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabl
 function listSection(parent,title,items,render){const d=el('details'),summary=el('summary',`${title} (${items.length})`);d.append(summary);let shown=0;const more=el('button','Show more');const fill=()=>{more.remove();for(const item of items.slice(shown,shown+50))d.append(render(item));shown+=50;if(shown<items.length)d.append(more);};more.onclick=fill;d.addEventListener('toggle',()=>{if(d.open&&!shown)fill();});parent.append(d);}
 function renderAssistant(report){
   $('timezone').value='America/New_York';
-  const root=$('assistantReport');root.replaceChildren();if(!report)return;$('automaticCount').textContent='0';
+  const root=$('assistantReport');root.replaceChildren();renderBriefing(report);if(!report)return;$('automaticCount').textContent='0';
   root.append(el('h3',report.status==='failed'?'Refresh failed':report.status==='running'?jobRunning?'Reading inboxes — progress is saved automatically':'Previous refresh was interrupted — click Refresh to resume':report.status==='complete'?report.automatic?.exceptions?.length?'Source checks finished — refresh needs attention':'Refresh complete for Central Tasks and all three inboxes':'Partial refresh — review sources that were not checked'));
   for(const s of report.sources||[])root.append(el('p',`${s.name}: ${s.status}${s.count!==undefined?' · '+s.count+' items':''}${s.detail?' — '+s.detail:''}`,s.status==='checked'?'source-ok':'source-pending'));
   if(report.error){root.append(el('p',report.error));$('results').hidden=true;return;}
@@ -47,7 +49,7 @@ function renderAssistant(report){
   listSection(root,'Collected email — automatic interpretation pending',report.inboxReview||[],m=>{
     const card=el('article',undefined,'issue');card.append(el('span',`${m.slot} · ${m.category}`,'tag'),el('h3',m.subject),el('p',m.from),el('p',m.snippet));
     for(const d of m.rememberedDecisions||[])card.append(el('p',`Remembered decision: ${d.title} was ${d.action}. ${d.note||''}`,'source-pending'));
-    const body=el('details');body.append(el('summary','Read email text'),el('p',m.body||'Plain-text body unavailable. Open the original email for full details.'));card.append(body,el('p',m.attachmentNotice+(m.bodyTruncated?' Email text was shortened.':''),'hint'));
+    const body=el('details');body.dataset.viewKey='mail:'+m.key;body.append(el('summary','Read email text'),el('p',m.body||'Plain-text body unavailable. Open the original email for full details.'));card.append(body,el('p',m.attachmentNotice+(m.bodyTruncated?' Email text was shortened.':''),'hint'));
     const create=el('button','Review new task');create.onclick=()=>{selectedMail=m;$('mailFrom').textContent=m.from;$('mailTitle').value=m.subject.slice(0,200);$('mailDue').value='';$('mailError').textContent='';$('mailDialog').showModal();};
     const ignore=el('button','No task needed');ignore.onclick=async()=>{ignore.disabled=true;try{await api('assistant/mail-review',{key:m.key,decision:'ignore'});await loadAssistant();}catch(e){say(e.message,true);}finally{ignore.disabled=false;}};
     const row=el('div',undefined,'row');row.append(create,ignore);card.append(row);return card;
@@ -81,8 +83,8 @@ $('cleanupCancel').onclick=()=>$('cleanupDialog').close();$('routineCancel').onc
 $('cleanupForm').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{await api('assistant/resolve-task',{taskId:selectedCleanup.id,action:$('cleanupAction').value,note:$('cleanupNote').value,confirmed:true});$('cleanupDialog').close();await reloadTasks();say('Your approved decision was verified in Notion and remembered.');}catch(error){$('cleanupError').textContent=error.message;}finally{b.disabled=false;}};
 $('routineForm').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{const result=await api('assistant/resolve-routine',{key:selectedRoutine.key,keeperId:$('routineKeeper').value,confirmed:true});$('routineDialog').close();await reloadTasks();say(result.updated+' repeated records were canceled and verified. The keeper remains active.');}catch(error){$('routineError').textContent=error.message;}finally{b.disabled=false;}};
 $('homeForm').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{await api('assistant/home-approve',{previewId:homePreview.id,confirmed:true});$('homeDialog').close();await loadAssistant();say('The displayed Home sections were updated and verified.');}catch(error){$('homeError').textContent=error.message;}finally{b.disabled=false;}};
-const updateToday=()=>{$('todayLabel').textContent=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',weekday:'long',year:'numeric',month:'long',day:'numeric'}).format(new Date())+' · New York time';};updateToday();setInterval(updateToday,60000);
-async function loadAssistant(){clearTimeout(pollTimer);const state=await api('assistant/state');const wasRunning=jobRunning;jobRunning=state.job?.status==='running';$('emailWindow').disabled=jobRunning;$('emailWindow').value=String(state.settings.emailLookbackDays);$('assistantRefresh').disabled=jobRunning||!config.connected;$('assistantRefresh').textContent=jobRunning?'Refresh running…':'Refresh my assistant';$('assistantStop').hidden=!jobRunning;$('jobStatus').textContent=jobRunning?(state.job?.phase?state.job.phase+'.':'Reading connected sources.')+' Keep the app’s Terminal window open.':state.job?.status==='needs attention'?'Source checks finished. Some refresh steps need attention; see Automatic update results below.':state.job?.status==='stopped'?'Stopped safely. Click Refresh to resume saved progress.':state.job?.status==='paused'?'Catch-up paused. Check the sources below; saved progress is retained.':state.job?.status==='failed'?(state.job.error||'Refresh failed. Check sources and change history.'):'';if(wasRunning&&!jobRunning)say(state.job?.status==='complete'?'Refresh finished. Check the verified updates below.':state.job?.status==='needs attention'?'Refresh finished with exceptions. See Automatic update results below.':'Refresh stopped. Check the source report and change history.',state.job?.status==='failed');if(jobRunning)pollTimer=setTimeout(()=>loadAssistant().catch(e=>say(e.message,true)),3000);$('updateText').disabled=jobRunning;$('saveUpdate').disabled=jobRunning;$('savedUpdates').replaceChildren();for(const u of (state.updates||[]).slice(-10).reverse())$('savedUpdates').append(el('p',u.status+': '+u.text+(u.detail?' — '+u.detail:'')));renderAssistant(state.latest);$('history').replaceChildren();for(const run of state.history)$('history').append(el('p',`${format(run.startedAt)} · ${run.status}${run.taskCount!==undefined?' · '+run.taskCount+' tasks':''}`));if(!state.history.length)$('history').textContent='No refreshes yet.';$('operations').replaceChildren();for(const op of state.operations)$('operations').append(el('p',`${format(op.at)} · ${op.title} · ${op.status}`));if(!state.operations.length)$('operations').textContent='No changes yet.';}
+const updateToday=()=>{$('todayLabel').textContent=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',weekday:'long',year:'numeric',month:'long',day:'numeric'}).format(new Date())+' · New York time';};updateToday();setInterval(()=>{const saved=rememberUI();updateToday();if(briefingTasks.length)renderBriefingCards();organizer.tick();restoreUI(saved);},60000);
+async function loadAssistant(){const savedUI=rememberUI();clearTimeout(pollTimer);const state=await api('assistant/state');const wasRunning=jobRunning;jobRunning=state.job?.status==='running';$('emailWindow').disabled=jobRunning;$('emailWindow').value=String(state.settings.emailLookbackDays);$('assistantRefresh').disabled=jobRunning||!config.connected;$('assistantRefresh').textContent=jobRunning?'Refresh running…':'Refresh my assistant';$('assistantStop').hidden=!jobRunning;$('jobStatus').textContent=jobRunning?(state.job?.phase?state.job.phase+'.':'Reading connected sources.')+' Keep the app’s Terminal window open.':state.job?.status==='needs attention'?'Source checks finished. Some refresh steps need attention; see Automatic update results below.':state.job?.status==='stopped'?'Stopped safely. Click Refresh to resume saved progress.':state.job?.status==='paused'?'Catch-up paused. Check the sources below; saved progress is retained.':state.job?.status==='failed'?(state.job.error||'Refresh failed. Check sources and change history.'):'';if(wasRunning&&!jobRunning)say(state.job?.status==='complete'?'Refresh finished. Check the verified updates below.':state.job?.status==='needs attention'?'Refresh finished with exceptions. See Automatic update results below.':'Refresh stopped. Check the source report and change history.',state.job?.status==='failed');if(jobRunning)pollTimer=setTimeout(()=>loadAssistant().catch(e=>say(e.message,true)),3000);$('updateText').disabled=jobRunning;$('saveUpdate').disabled=jobRunning;$('savedUpdates').replaceChildren();for(const u of (state.updates||[]).slice(-10).reverse())$('savedUpdates').append(el('p',u.status+': '+u.text+(u.detail?' — '+u.detail:'')));renderAssistant(state.latest);organizer.update(state);restoreUI(savedUI);$('history').replaceChildren();for(const run of state.history)$('history').append(el('p',`${format(run.startedAt)} · ${run.status}${run.taskCount!==undefined?' · '+run.taskCount+' tasks':''}`));if(!state.history.length)$('history').textContent='No refreshes yet.';$('operations').replaceChildren();for(const op of state.operations)$('operations').append(el('p',`${format(op.at)} · ${op.title} · ${op.status}`));if(!state.operations.length)$('operations').textContent='No changes yet.';}
 run('assistantRefresh',async()=>{say('Reading connected sources, then applying supported routine updates in Notion…');$('planDialog').close();$('mailDialog').close();try{await api('assistant/start');await loadAssistant();say('Refresh started. The app will read recent email, apply supported routine updates in Notion, and report exceptions.');}catch(e){await loadAssistant();throw e;}});
 $('emailWindow').onchange=async()=>{const days=Number($('emailWindow').value);$('emailWindow').disabled=true;try{await api('assistant/email-window',{days});await loadAssistant();say('Saved: last '+days+' days of inbox email. Click Refresh to start the recent-email scan. Older Notion tasks are still checked.');}catch(e){say(e.message,true);}finally{$('emailWindow').disabled=jobRunning;}};
 run('assistantStop',async()=>{await api('assistant/stop');say('Stopping after the current batch. Progress will be kept.');});
@@ -95,3 +97,60 @@ fetch('/api/config').then(r=>r.json()).then(async c=>{config=c;$('database').val
 
 $('updateForm').onsubmit=async e=>{e.preventDefault();$('saveUpdate').disabled=true;try{await api('assistant/update',{text:$('updateText').value});$('updateText').value='';await loadAssistant();say('Information saved. Click Refresh to apply it.');}catch(error){say(error.message,true);}finally{$('saveUpdate').disabled=jobRunning;}};
 
+function taskLink(task,parent){
+  try{const url=new URL(task.url);if(url.protocol==='https:'&&['notion.so','notion.site','notion.com'].some(h=>url.hostname===h||url.hostname.endsWith('.'+h))){const a=el('a','Open in Notion');a.href=url.href;a.target='_blank';a.rel='noopener noreferrer';parent.append(a);}}catch{}
+}
+function briefTask(task,detail){const card=el('article',undefined,'brief-task');card.append(el('h3',task.title),el('p',detail));if(task.notes)card.append(el('p',task.notes,'hint'));taskLink(task,card);return card;}
+function renderBriefing(report){
+  const root=$('dailyBrief');root.replaceChildren();briefingTasks=report?.tasks||[];root.hidden=!report?.tasks;
+  if(root.hidden)return;
+  root.append(el('h2','Your day at a glance'),el('p','Based on saved Central Tasks, read '+format(report.finishedAt||report.startedAt)+'. External calendars and commitments in unprocessed email are not included.','hint'));
+  if(report.status!=='complete'||report.needsRefresh)root.append(el('p','This snapshot may be incomplete or out of date. Check the source report before relying on it.','source-pending'));
+  const cards=el('div',undefined,'brief-grid');cards.id='briefCards';root.append(cards);renderBriefingCards();
+  const details=el('details');details.append(el('summary','Find a task'));
+  const label=el('label','Search titles, areas, and next actions'),input=el('input');input.id='taskSearch';input.type='search';input.placeholder='Try a person, class, or errand';label.append(input);
+  const statusLabel=el('label','Show'),select=el('select');select.id='taskSearchStatus';for(const [value,title] of [['active','Active tasks'],['waiting','Waiting on others'],['all','All tasks'],['closed','Completed or canceled']]){const option=el('option',title);option.value=value;select.append(option);}statusLabel.append(select);
+  const count=el('p',undefined,'hint');count.setAttribute('role','status');const results=el('div'),more=el('button','Show more');let limit=20;
+  const render=()=>{const matches=findTasks(briefingTasks,input.value,select.value);count.textContent=matches.length+' matching tasks'+(matches.length>limit?' · showing '+limit:'');results.replaceChildren();for(const t of matches.slice(0,limit))results.append(briefTask(t,[t.status,t.category,t.due?.start?'Due '+format(t.due.start):''].filter(Boolean).join(' · ')));if(!matches.length)results.append(el('p','No tasks match this search.'));more.hidden=matches.length<=limit;};
+  input.value=uiPrefs.search||'';select.value=uiPrefs.searchStatus||'active';input.oninput=select.onchange=()=>{limit=20;uiPrefs.search=input.value;uiPrefs.searchStatus=select.value;storePrefs();render();};more.onclick=()=>{limit+=20;render();};details.append(label,statusLabel,count,results,more);root.append(details);render();renderMoneyReview(root);
+}
+function renderBriefingCards(){
+  const root=$('briefCards');if(!root)return;const brief=buildBriefing(briefingTasks);root.replaceChildren();
+  const sections=[['Deadlines needing attention',brief.urgent,t=>briefTask(t,(brief.isOverdue(t)?'Overdue':'Due today')+' · '+format(t.due.start)),'No recorded deadlines due today or overdue.'],['Today’s recorded schedule',brief.agenda,i=>briefTask(i.task,(i.task.kind==='Fixed commitment'?'Commitment':'Planned work')+' · '+format(i.start)+(i.end?' → '+format(i.end):'')),'No recorded schedule for today.'],['Waiting on someone',brief.waiting,t=>briefTask(t,'Waiting'+(t.due?.start?' · Due '+format(t.due.start):'')),'No tasks marked Waiting.']];
+  for(const [title,items,render,empty] of sections){const column=el('div',undefined,'brief-column');column.append(el('h3',title+' ('+items.length+')'));for(const item of items.slice(0,3))column.append(render(item));if(!items.length)column.append(el('p',empty));if(items.length>3){const more=el('details');more.append(el('summary','Show '+(items.length-3)+' more'));more.addEventListener('toggle',()=>{if(more.open&&more.childElementCount===1)for(const item of items.slice(3))more.append(render(item));});column.append(more);}root.append(column);}
+}
+
+function renderMoneyReview(parent){
+  const review=buildMoneyReview(briefingTasks),details=el('details');details.append(el('summary','Bills, subscriptions & renewals ('+review.total+')'));
+  details.append(el('p','Active tasks found by their title or finance area. Check each record for the amount, provider, and cancellation deadline. A task here does not confirm an outstanding balance.','hint'));
+  const groups=[['Due today or overdue',review.attention],['Coming up in the next 30 days',review.upcoming],['Needs a deadline',review.undated],['Later',review.later]];
+  for(const [title,items] of groups){
+    const group=el('details');group.open=title!=='Later';group.append(el('summary',title+' ('+items.length+')'));
+    let shown=0;const more=el('button','Show more');const fill=()=>{more.remove();for(const item of items.slice(shown,shown+20)){const card=briefTask(item.task,item.date?'Recorded deadline: '+format(item.task.due.start):'No actual deadline recorded — add one in Notion.');if(!item.task.notes)card.append(el('p','Add a next action in Notion, such as checking the renewal price or confirming cancellation.','hint'));group.append(card);}shown+=20;if(shown<items.length)group.append(more);};more.onclick=fill;fill();
+    if(!items.length)group.append(el('p','No matching recorded tasks.'));details.append(group);
+  }
+  const add=el('button','Capture a bill or renewal');add.disabled=jobRunning;add.onclick=()=>{organizer.captureDraft({title:'Review subscription renewal',nextAction:'Check the renewal amount and cancellation deadline'});};details.append(add,el('p','Notion renewal tasks do not repeat automatically. Use a recurring reminder in the personal organizer to track the next occurrence.','hint'));parent.append(details);
+}
+
+const organizer=createOrganizer({api,el,say,reload:loadAssistant,format,taskLink});
+let uiPrefs={};try{uiPrefs=JSON.parse(sessionStorage.getItem('assistant-view')||'{}')||{};}catch{}
+function storePrefs(){try{sessionStorage.setItem('assistant-view',JSON.stringify(uiPrefs));}catch{}}
+function detailKey(d){
+  if(d.id)return d.id;
+  const text=d.dataset.viewKey||d.querySelector(':scope > summary')?.textContent.replace(/ \(\d+\)/g,'')||'';
+  let hash=2166136261;for(const c of text)hash=Math.imul(hash^c.charCodeAt(0),16777619);
+  return 'detail-'+(hash>>>0).toString(16);
+}
+function rememberUI(){
+  const active=document.activeElement,details={...uiPrefs.details};uiPrefs.issueFilter=$('filter').value;
+  document.querySelectorAll('main details').forEach(d=>{details[detailKey(d)]=d.open;});uiPrefs.details=details;storePrefs();
+  return {focus:active?.id,start:active?.selectionStart,end:active?.selectionEnd,scroll:window.scrollY};
+}
+function restoreUI(saved){
+  if(uiPrefs.issueFilter&&[...$('filter').options].some(o=>o.value===uiPrefs.issueFilter)){$('filter').value=uiPrefs.issueFilter;renderIssues();}
+  document.querySelectorAll('main details').forEach(d=>{const open=uiPrefs.details?.[detailKey(d)];if(open!==undefined)d.open=open;});
+  if(saved?.focus){const target=$(saved.focus);if(target&&!target.disabled){target.focus({preventScroll:true});if(target.type==='search'||target.type==='text'||target.tagName==='TEXTAREA')target.setSelectionRange(saved.start,saved.end);}}
+  if(saved)window.scrollTo(0,saved.scroll);
+}
+document.addEventListener('toggle',e=>{if(e.target.tagName==='DETAILS'&&e.target.closest('main')){uiPrefs.details={...uiPrefs.details,[detailKey(e.target)]:e.target.open};storePrefs();}},true);
+restoreUI();

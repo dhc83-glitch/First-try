@@ -1,4 +1,6 @@
 import {randomUUID} from 'node:crypto';
+import {captureFields,editOrganizer} from './organizer.js';
+import {previewRecovery,restoreOperation} from './recovery.js';
 import {readCentral,auditCentral,changesSince,buildPlan} from './assistant.js';
 import {localParts} from './audit.js';
 import {gmailFailureDetail} from './gmail.js';
@@ -21,7 +23,28 @@ const pendingSources=(state,continuing)=>[
 ];
 export class Assistant {
   constructor({notion,store,sourceId,gmail,clock=()=>new Date()}){Object.assign(this,{notion,store,sourceId,gmail,clock});this.busy=false;}
-  async state(){const s=await this.store.read();return {latest:s.latest,history:s.history,operations:s.operations||[],updates:s.updates||[],automatic:s.automatic||null,settings:{emailLookbackDays:s.settings?.emailLookbackDays||14},configured:!!this.notion};}
+  async state(){const s=await this.store.read();return {latest:s.latest,history:s.history,operations:s.operations||[],organizer:s.organizer||{revision:0,items:[],history:[]},updates:s.updates||[],automatic:s.automatic||null,settings:{emailLookbackDays:s.settings?.emailLookbackDays||14},configured:!!this.notion};}
+  async organizerEdit(input){return editOrganizer(this,input);}
+  async recoveryPreview(input){
+    if(this.busy)throw Error('Wait until the refresh or update finishes.');
+    this.busy=true;try{return await previewRecovery(this,input.id);}finally{this.busy=false;}
+  }
+  async restore(input){
+    if(this.busy)throw Error('Wait until the refresh or update finishes.');
+    this.busy=true;try{return await restoreOperation(this,input);}finally{this.busy=false;}
+  }
+  async capture(input){
+    if(this.busy)throw Error('Wait until the refresh or update finishes.');
+    const fields=captureFields(input);
+    if(typeof input.requestId!=='string'||!/^[a-zA-Z0-9-]{10,80}$/.test(input.requestId))throw Error('Reload the capture form before saving.');
+    this.busy=true;
+    try{
+      const state=await this.store.read();
+      const previous=(state.updates||[]).find(u=>u.requestId===input.requestId);if(previous){if(JSON.stringify(previous.capture)!==JSON.stringify(fields))throw Error('This capture was already saved with different fields. Reload and inspect saved updates before adding another task.');return {saved:true,alreadyQueued:true};}
+      state.updates=[...(state.updates||[]),{id:randomUUID(),requestId:input.requestId,text:'Add: '+fields.title,capture:fields,status:'pending',at:this.clock().toISOString()}];
+      await this.store.write(state);return {saved:true};
+    }finally{this.busy=false;}
+  }
   async saveUpdate({text}){
     if(this.busy)throw new Error('Wait until this refresh finishes before saving an update.');
     if(typeof text!=='string'||!text.trim()||text.length>2000)throw new Error('Enter an update of 1–2,000 characters.');
@@ -36,7 +59,7 @@ export class Assistant {
     for(const op of initial.operations||[])if(op.status!=='verified')summary.exceptions.push({taskId:op.taskId,title:op.title,reason:'An earlier Notion write needs verification; automatic retry is blocked.'});
     const pending=(initial.updates||[]).filter(u=>u.status==='pending');
     // Later explicit instructions about the same task supersede earlier queued ones.
-    const prepared=pending.map(update=>({update,parsed:interpretUpdate(update.text,initial.latest.tasks)}));
+    const prepared=pending.map(update=>({update,parsed:update.capture?{action:'create',title:update.capture.title}:interpretUpdate(update.text,initial.latest.tasks)}));
     for(let i=0;i<prepared.length;i++){
       const {update,parsed}=prepared[i];
       if(parsed.taskId&&prepared.slice(i+1).some(p=>p.parsed.taskId===parsed.taskId)){
@@ -111,9 +134,9 @@ export class Assistant {
   async createFromUpdate(update,title){
     const state=await this.store.read(),sourceKey='assistant-update:'+update.id;
     if(matchingDecisions(title,state.taskDecisions).length)throw new Error('A remembered cancellation/completion matches this title. No task was recreated.');
-    if(state.latest.tasks.some(t=>t.title.trim().toLowerCase()===title.toLowerCase()&&!t.done&&!['Done','Canceled','Cancelled'].includes(t.status)))return;
+    if(state.latest.tasks.some(t=>t.title.trim().toLowerCase()===title.toLowerCase()&&!t.done&&!['Done','Canceled','Cancelled'].includes(t.status))){if(update.capture)throw Error('An active task with this title already exists. Edit its deadline and next action in Notion.');return;}
     const sameTitle=await this.notion.all('/data_sources/'+state.sourceId+'/query',{filter:{property:'Task name',title:{equals:title}}});
-    if(sameTitle.some(p=>!['Done','Canceled','Cancelled'].includes(p.properties.Status?.select?.name)))return;
+    if(sameTitle.some(p=>!['Done','Canceled','Cancelled'].includes(p.properties.Status?.select?.name))){if(update.capture)throw Error('A task with this title already exists. Edit it in Notion.');return;}
     const existing=await this.notion.all('/data_sources/'+state.sourceId+'/query',{filter:{property:'Source',rich_text:{equals:sourceKey}}});
     if(existing.length)return;
     if((state.operations||[]).some(o=>o.updateId===update.id&&o.status!=='verified'))throw new Error('A prior creation attempt needs verification; it will not be retried automatically.');
@@ -123,12 +146,19 @@ export class Assistant {
     if(!status)throw new Error('No existing Inbox or To do status is available.');
     const text=content=>[{text:{content}}];
     const properties={'Task name':{title:text(title)},Status:{select:{name:status}},Source:{rich_text:text(sourceKey)}};
+    if(update.capture){
+      const c=captureFields(update.capture);
+      if(c.due){if(schema.properties['Due date']?.type!=='date')throw Error('Due date column is unavailable.');properties['Due date']={date:{start:c.due}};}
+      if(c.nextAction){if(schema.properties['Next action']?.type!=='rich_text')throw Error('Next action column is unavailable.');properties['Next action']={rich_text:text(c.nextAction)};}
+      if(c.area){if(schema.properties.Area?.type!=='select'||!schema.properties.Area.select?.options?.some(o=>o.name===c.area))throw Error('Choose an existing Notion area.');properties.Area={select:{name:c.area}};}
+    }
     const operation={id:randomUUID(),updateId:update.id,title,at:this.clock().toISOString(),status:'pending verification',action:'create from your update'};
     state.operations=retainOperations([operation,...(state.operations||[])]);await this.store.write(state);
     try{
       const created=await this.notion.call('/pages','POST',{parent:{type:'data_source_id',data_source_id:state.sourceId},properties});
       const verified=await this.notion.call('/pages/'+created.id);
-      if(rich(verified.properties.Source?.rich_text)!==sourceKey)throw new Error('Creation verification failed');
+      if(rich(verified.properties.Source?.rich_text)!==sourceKey||rich(verified.properties['Task name']?.title)!==title)throw new Error('Creation verification failed');
+      if(update.capture){const c=update.capture;if(c.due&&verified.properties['Due date']?.date?.start!==c.due||c.area&&verified.properties.Area?.select?.name!==c.area||c.nextAction&&rich(verified.properties['Next action']?.rich_text)!==c.nextAction)throw Error('Captured field verification failed');}
       operation.status='verified';operation.taskId=created.id;await this.store.write(state);
     }catch{operation.status='needs verification';await this.store.write(state);throw new Error('Creation outcome is uncertain. It will not be retried automatically.');}
   }
@@ -400,7 +430,7 @@ export class Assistant {
       if(current.last_edited_time!==proposal.lastEdited||current.archived||current.in_trash)throw new Error('This task changed in Notion. Refresh before approving it.');
       for(const field of ['Start','Finish by','Do date','On calendar'])if(current.properties[field]?.type!=='date')throw new Error(`The ${field} column is unavailable. Nothing was changed.`);
       const properties={'Start':{date:{start:proposal.start}},'Finish by':{date:{start:proposal.end}},'Do date':{date:{start:localParts(proposal.start,'America/New_York').day}},'On calendar':{date:{start:proposal.start,end:proposal.end}}};
-      const operation={id:randomUUID(),taskId:proposal.taskId,title:proposal.title,at:this.clock().toISOString(),status:'pending verification',properties};
+      const operation={id:randomUUID(),taskId:proposal.taskId,title:proposal.title,at:this.clock().toISOString(),status:'pending verification',before:current.properties,properties};
       // Persist intent before writing. Never automatically retry a possibly successful write.
       report.needsRefresh=true;report.plan.proposals=inBatch?report.plan.proposals.filter(p=>p.id!==proposalId):[];
       state.operations=retainOperations([operation,...(state.operations||[])]);await this.store.write(state);

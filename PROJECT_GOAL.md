@@ -16,6 +16,10 @@ Explain progress and required user actions in everyday language, one step at a t
 
 ## Implemented and tested with fixtures
 
+- Bills/subscriptions/renewals discovery view groups active matching tasks by actual deadline (today/overdue, next 30 New York dates, undated, later), shows next actions, and offers an editable capture shortcut. No bank connection or inferred payment status; recurring local reminders are now implemented separately in the personal organizer.
+
+- Saved-data daily briefing shows due/overdue deadlines, today’s recorded schedule, and Waiting tasks; searchable task lookup includes active and closed records. New York date/search fixtures and mocked Chromium checks pass. The user reports the earlier dashboard working on the Mac; installation of the subsequent organizer batch remains unverified. The full HTTP suite passes with local test ports enabled.
+
 - Direct, paginated Notion access; recovery of sources omitted by search.
 - Persistent refresh comparisons, source coverage, operation history, and guarded single-process writes.
 - Multi-date task normalization, audit issues, next-seven-day deadlines, and provisional work-time suggestions.
@@ -29,6 +33,14 @@ Explain progress and required user actions in everyday language, one step at a t
 - Central Tasks dates shown in calendar.notion.com are already included; Google calendars and other databases displayed there are outside coverage.
 - Refresh processes explicit saved local updates, reapplies remembered decisions, and closes narrow past event reminders. Ambiguous notes and uncertain writes are durable exceptions. Questions/negations/future plans do not authorize closing tasks.
 - Automatic work-time application is deferred while collected emails remain unreconciled. Raw-read coverage is not semantic completeness.
+
+## Approved ten-feature improvement batch
+
+The user reports that the earlier dashboard update is installed on the Mac and Refresh looks better. The following ten-feature batch is a subsequent development update, not a verified Mac installation.
+
+Implemented together: weekly review; a bounded daily priority list; local follow-up tracking; local daily/weekly/monthly/yearly reminders; appointment-preparation checklists; location-grouped errands; structured queued Notion capture; a concise refresh digest; guarded verified task restoration and latest local organizer undo; mobile/accessibility improvements and session-preserved views. Local organizer records remain separate from Notion. Reminder notifications, automated outreach, bank payments, and calendar bookings are not implemented. Existing general email interpretation work remains unfinished.
+
+Validation includes recurrence/date boundaries, request idempotency, stale organizer revisions, structured Notion field verification, priority capacity, evidence-based completion summaries, and restore safety/uncertainty. Local Chromium checks exercise capture, draft/search preservation, recurrence, preparation checklists, errands, follow-ups, both restore flows, preference restoration, and a 390-pixel layout against mocked sources. The prior Node test crashes were caused by sandbox denial of local listening ports; the full suite passes when local test ports are enabled. No live Notion writes or Mac installation were performed for this batch.
 
 ## Remaining before it can replace the morning assistant
 

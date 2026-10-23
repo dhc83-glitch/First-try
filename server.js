@@ -36,13 +36,23 @@ export function createApp({token=process.env.NOTION_TOKEN, databaseId=process.en
         const data=await body(req);
         if(path==='/api/gmail/status')return json(res,200,await gmail.status());
         if(path==='/api/gmail/connect')return json(res,200,{url:gmail.begin(data.slot,`http://${host}`)});
-        if(!notion)return json(res,503,{error:'Set NOTION_TOKEN in the server environment, then restart. Never enter a token in chat.'});
         if(path==='/api/assistant/state'){
           const currentJob=job.current?{...job.current}:null;
           return json(res,200,{...await assistant.state(),job:currentJob});
         }
+        if(path==='/api/assistant/organizer'){
+          if(busy||job.running)throw Error('Wait until the refresh or update finishes.');
+          return json(res,200,await assistant.organizerEdit(data));
+        }
+        if(!notion)return json(res,503,{error:'Set NOTION_TOKEN in the server environment, then restart. Never enter a token in chat.'});
         if(path==='/api/assistant/start'){if(busy)throw new Error('A Notion update is running.');return json(res,202,{job:job.start()});}
         if(path==='/api/assistant/stop')return json(res,200,job.stop());
+        if(['/api/assistant/capture','/api/assistant/recovery-preview','/api/assistant/restore'].includes(path)){
+          if(busy||job.running)throw Error('Wait until the refresh or update finishes.');
+          if(path.endsWith('/capture'))return json(res,200,await assistant.capture(data));
+          if(path.endsWith('/recovery-preview'))return json(res,200,await assistant.recoveryPreview(data));
+          return json(res,200,await assistant.restore(data));
+        }
         if(path==='/api/assistant/update'){if(busy||job.running)throw new Error('Wait until this refresh finishes before saving an update.');return json(res,200,await assistant.saveUpdate(data));}
         if(path==='/api/assistant/email-window'){if(busy||job.running)throw new Error('Stop the running refresh and wait for the current batch first.');return json(res,200,await assistant.setEmailWindow(data));}
         if(job.running&&['/api/assistant/refresh','/api/assistant/approve','/api/assistant/mail-review','/api/assistant/resolve-task','/api/assistant/resolve-routine','/api/assistant/forget-decision','/api/assistant/home-preview','/api/assistant/home-approve','/api/audit','/api/update'].includes(path))throw new Error('Catch-up is running. Stop it and wait for the current batch before reviewing changes.');
@@ -101,7 +111,7 @@ export function createApp({token=process.env.NOTION_TOKEN, databaseId=process.en
         }
         return json(res,404,{error:'Unknown API route'});
       }
-      const files={'/':'index.html','/app.js':'app.js','/style.css':'style.css'};
+      const files={'/':'index.html','/app.js':'app.js','/briefing.js':'briefing.js','/planning.js':'planning.js','/organizer-ui.js':'organizer-ui.js','/style.css':'style.css'};
       if(req.method!=='GET'||!files[path])return json(res,404,{error:'Not found'});
       const content=await readFile(new URL(`./public/${files[path]}`,import.meta.url));
       res.writeHead(200,{'Content-Type':path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':'text/html','Cache-Control':'no-store'});res.end(content);

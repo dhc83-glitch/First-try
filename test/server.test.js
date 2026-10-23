@@ -11,7 +11,8 @@ test('local dashboard and mocked live read; writes require confirmation and stal
   const notion={call:async(path,method,body)=>{if(method==='PATCH'){writes++;assert.deepEqual(body.properties.Schedule,{date:null});return {};}if(path.startsWith('/pages/'))return {...page,last_edited_time:stale?'v2':'v1'};return {id,properties:{Name:{type:'title'},Status:{type:'status'},Schedule:{type:'date'}}};},all:async()=>[page]};
   const server=createApp({notion});await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>server.close());const base=`http://127.0.0.1:${server.address().port}`;
   const config=await (await fetch(base+'/api/config')).json();assert.equal(config.connected,true);assert.equal(config.token,undefined);
-  assert.match(await (await fetch(base)).text(),/Personal Task Auditor/);
+  assert.match(await (await fetch(base)).text(),/Personal Assistant/);
+  const moduleResponse=await fetch(base+'/briefing.js');assert.equal(moduleResponse.status,200);assert.match(moduleResponse.headers.get('content-type'),/javascript/);
   const post=(path,body,csrf=config.csrf)=>fetch(base+'/api/'+path,{method:'POST',headers:{'Content-Type':'application/json','X-Auditor-Token':csrf},body:JSON.stringify(body)});
   assert.equal((await post('audit',{},'wrong')).status,403);
   const gmailStatus=await (await post('gmail/status',{})).json();assert.equal(gmailStatus.accounts.length,3);assert.ok(gmailStatus.accounts.every(a=>a.connected===false));
@@ -33,6 +34,31 @@ test('HTTP start catches up in background, exposes status, and performs no Notio
  const config=await(await fetch(base+'/api/config')).json();
  const post=async route=>fetch(base+'/api/'+route,{method:'POST',headers:{'Content-Type':'application/json','X-Auditor-Token':config.csrf},body:'{}'});
  assert.equal((await post('assistant/start')).status,202);
+ for(const route of ['assistant/organizer','assistant/capture','assistant/recovery-preview','assistant/restore'])assert.equal((await post(route)).status,400);
  let state;for(let i=0;i<50;i++){state=await(await post('assistant/state')).json();if(state.job?.status!=='running')break;await new Promise(r=>setTimeout(r,10));}
  assert.equal(state.job.status,'needs attention');assert.equal(state.job.rounds,2);assert.equal(state.latest.status,'complete');assert.equal(state.latest.inboxReview.length,3);assert.equal(writes,0);
+});
+
+test('organizer and capture HTTP routes persist data without Notion writes and require the local token',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'organizer-http-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ const store=new Store(dir);let calls=0;const app=createApp({notion:{call:async()=>{calls++;throw Error('Unexpected Notion call');}},store,gmail:{status:async()=>({configured:false,accounts:[]})}});
+ await new Promise(r=>app.listen(0,'127.0.0.1',r));t.after(()=>app.close());const base=`http://127.0.0.1:${app.address().port}`;
+ const config=await(await fetch(base+'/api/config')).json();
+ const post=(route,data,csrf=config.csrf)=>fetch(base+'/api/'+route,{method:'POST',headers:{'Content-Type':'application/json','X-Auditor-Token':csrf},body:JSON.stringify(data)});
+ assert.equal((await post('assistant/organizer',{action:'save',revision:0,item:{title:'Buy milk',kind:'errand',location:'Grocery'}})).status,200);
+ assert.equal((await post('assistant/organizer',{action:'save',revision:0,item:{title:'Stale'}})).status,400);
+ assert.equal((await post('assistant/capture',{requestId:'http-capture-request-123',title:'Review rent',due:'2026-11-01',nextAction:'Check invoice'})).status,200);
+ assert.equal((await post('assistant/organizer',{},'wrong-token')).status,403);
+ const result=await(await post('assistant/state',{})).json();assert.equal(result.organizer.items[0].location,'Grocery');assert.equal(result.updates[0].capture.due,'2026-11-01');assert.equal(calls,0);
+ for(const path of ['/planning.js','/organizer-ui.js']){const res=await fetch(base+path);assert.equal(res.status,200);assert.match(res.headers.get('content-type'),/javascript/);}
+});
+
+test('the personal organizer remains available without a Notion connection',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'offline-organizer-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ const app=createApp({notion:null,store:new Store(dir),gmail:{status:async()=>({configured:false,accounts:[]})}});await new Promise(r=>app.listen(0,'127.0.0.1',r));t.after(()=>app.close());
+ const base=`http://127.0.0.1:${app.address().port}`,config=await(await fetch(base+'/api/config')).json();assert.equal(config.connected,false);
+ const post=(path,data)=>fetch(base+'/api/'+path,{method:'POST',headers:{'Content-Type':'application/json','X-Auditor-Token':config.csrf},body:JSON.stringify(data)});
+ assert.equal((await post('assistant/organizer',{action:'save',revision:0,item:{title:'Bring documents',kind:'appointment'}})).status,200);
+ assert.equal((await(await post('assistant/state',{})).json()).organizer.items.length,1);
+ assert.equal((await post('assistant/start',{})).status,503);
 });

@@ -44,6 +44,14 @@ Approved suggestions update **Start**, **Finish by**, **Do date**, and **On cale
 
 The `.local/assistant.json` record stores private task/email data, comparisons, review decisions, and the last 30 reads and 50 recent operations (plus older unverified operations) with owner-only file permissions. `.local/` is ignored by Git. Keep it private and back it up securely if needed; do not commit it. Atomic file replacement protects against partial files; malformed data stops the refresh rather than silently resetting memory. Run only one server process against a store. This is local single-user persistence, not a multi-process database or tamper-proof audit log.
 
+## A calmer Home dashboard
+
+Refresh adds a compact daily planner inside the existing dated Home callout. It shows **Your next 3** and **Today’s commitments**, with expandable sections for **This week · actual deadlines**, **Waiting on others**, **Needs your input**, and **Refresh details**. The main paragraph becomes a short briefing rather than a long source report. Existing detailed sections, historical layouts, and database views remain below it and retain their existing update behavior.
+
+The three actions use recorded priority and actual deadlines, excluding completed, canceled, held, waiting, fixed-event, future-planned, and unconfirmed work. These are task-record suggestions, not evidence of complete email interpretation. Today’s recorded timed blocks and deadlines remain separate. The week section lists actual deadlines, including overdue work; it does not turn planning dates into deadlines or book work times.
+
+The first Refresh installs the owned layout and reads it back. Later refreshes update those same blocks. A partial or uncertain installation is recorded and blocks automatic retries to avoid duplicate layouts. Manual structural edits become visible exceptions. Original replaced text and creation intent remain in private operation history. This is additive: no task or historical section is deleted. The layout and failure handling are fixture-tested; the redesign still needs installation and visual verification on the Mac.
+
 ## Gmail setup (one time)
 
 The app cannot inherit Gmail connections from ChatGPT. It uses Google's official OAuth sign-in and **gmail.readonly** permission. It never sends, deletes, archives, or marks emails as read.
@@ -137,3 +145,4 @@ These tests validate the local workflow against mock API responses. They do **no
 - **Wrong/missing flags:** check property mappings, completed/inactive status labels, discretionary category labels, timezone, and default duration.
 
 Cloud setup saves reusable startup instructions separately from the running process. Review/save the environment draft and publish through environment settings when you want to reuse the prepared environment. Publishing and a fresh-task restore are separate from current-instance validation.
+

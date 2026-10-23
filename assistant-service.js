@@ -4,7 +4,8 @@ import {localParts} from './audit.js';
 import {gmailFailureDetail} from './gmail.js';
 import {cleanupReview,matchingDecisions} from './cleanup.js';
 import {previewHome} from './home-summary.js';
-import {homeValue,homeValueEqual} from './home-content.js';
+import {samePlannerBlocks} from './daily-planner.js';
+import {homeValue,homeValueEqual,readHomeTree} from './home-content.js';
 import {completionCandidates} from './correspondence.js';
 import {rich} from './notion.js';
 import {interpretUpdate,automaticCleanup,isDailyGoal,taskTitleCorrections} from './automatic.js';
@@ -103,7 +104,7 @@ export class Assistant {
       const pendingHome=state.operations?.find(o=>o.title==='Update Home dated task summary');
       if(pendingHome&&pendingHome.status!=='verified')throw new Error('An earlier Home update needs verification; it will not be overwritten automatically.');
       onPhase('Updating Home sections');
-      const preview=await this.homePreview();await this.approveHome({previewId:preview.id,confirmed:true});summary.homeUpdated=true;summary.homeBlocksUpdated=preview.changes.length;summary.homeSections=preview.coverage;summary.homeWarnings=preview.warnings;}catch(error){summary.exceptions.push({reason:'Home summary: '+error.message});}
+      const preview=await this.homePreview();await this.approveHome({previewId:preview.id,confirmed:true});summary.homeUpdated=true;summary.homeBlocksUpdated=preview.changes.length+(preview.appends||[]).reduce((n,a)=>n+a.children.length,0);summary.homeSections=preview.coverage;summary.homeWarnings=preview.warnings;}catch(error){summary.exceptions.push({reason:'Home summary: '+error.message});}
     state=await this.store.read();state.automatic=summary;state.latest.automatic=summary;await this.store.write(state);return summary;
   }
   async recordUpdateOutcome(id,status,detail){const state=await this.store.read();const update=state.updates?.find(u=>u.id===id);if(update){update.status=status;update.detail=detail;await this.store.write(state);}}
@@ -357,7 +358,11 @@ export class Assistant {
         const current=await this.notion.call('/blocks/'+change.id);
         if(current.type!==change.type||current.last_edited_time!==change.lastEdited||JSON.stringify(homeValue(current,change.field||'rich_text'))!==JSON.stringify(change.before))throw new Error('Home was edited since the preview. Generate a new preview before approving.');
       }
-      const operation={id:randomUUID(),title:'Update Home dated task summary',at:this.clock().toISOString(),status:'pending verification',before:preview.changes.map(c=>({id:c.id,type:c.type,field:c.field||'rich_text',value:c.before})),changes:preview.changes};
+      for(const append of preview.appends||[]){
+        const parent=await this.notion.call('/blocks/'+append.parentId);
+        if(parent.last_edited_time!==append.lastEdited)throw new Error('Home was edited since the preview. Generate a new preview before approving.');
+      }
+      const operation={id:randomUUID(),title:'Update Home dated task summary',at:this.clock().toISOString(),status:'pending verification',before:preview.changes.map(c=>({id:c.id,type:c.type,field:c.field||'rich_text',value:c.before})),changes:preview.changes,appends:preview.appends||[]};
       state.operations=retainOperations([operation,...(state.operations||[])]);state.homePreview=null;await this.store.write(state);
       try{
         operation.completedBlocks=[];
@@ -367,6 +372,16 @@ export class Assistant {
           const current=await this.notion.call('/blocks/'+change.id);
           if(!homeValueEqual(homeValue(current,change.field||'rich_text'),change.after,change.field||'rich_text'))throw new Error('Home verification failed');
           operation.completedBlocks.push(change.id);operation.pendingBlock=null;await this.store.write(state);
+        }
+        for(const append of preview.appends||[]){
+          operation.pendingAppend=append.parentId;await this.store.write(state);
+          const created=await this.notion.call('/blocks/'+append.parentId+'/children','PATCH',{children:append.children});
+          operation.appendedBlockIds=(created.results||[]).map(b=>b.id);await this.store.write(state);
+          if(operation.appendedBlockIds.length!==append.children.length||new Set(operation.appendedBlockIds).size!==append.children.length)throw new Error('Daily planner creation response was incomplete');
+          const rows=await readHomeTree(this.notion,append.parentId);
+          const actual=operation.appendedBlockIds.map(id=>rows.find(b=>b.id===id));
+          if(actual.some(b=>!b)||!samePlannerBlocks(actual,append.children))throw new Error('Daily planner verification failed');
+          operation.pendingAppend=null;await this.store.write(state);
         }
         operation.status='verified';await this.store.write(state);return {updated:true,verified:true};
       }catch(error){operation.status='needs verification';operation.detail=error.message;await this.store.write(state);throw new Error('Home may be partially updated. Inspect the reported sections before trying again. The original text was retained in the private operation record.');}
@@ -406,3 +421,4 @@ export class Assistant {
     }finally{this.busy=inBatch?wasBusy:false;}
   }
 }
+

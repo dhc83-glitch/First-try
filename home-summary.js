@@ -1,4 +1,5 @@
 import {randomUUID} from 'node:crypto';
+import {planDailyPlanner} from './daily-planner.js';
 import {rich} from './notion.js';
 import {readHomeTree,planHomeContent} from './home-content.js';
 
@@ -14,5 +15,10 @@ export async function previewHome(notion,report){
   const result=planHomeContent(tree,report);
   if(!dated)throw new Error('The existing dated Home callout was not found. No page was changed.');
   if(!dated.children?.some(b=>b.type==='paragraph'))throw new Error('The dated callout has no supported summary paragraph. No page was changed.');
+  const planner=planDailyPlanner(dated,report);
+  result.changes.push(...planner.changes);
+  result.coverage=[...new Set([...result.coverage,...planner.coverage])];
+  result.appends=planner.append?[planner.append]:[];
   return {id:randomUUID(),runId:report.id,date:report.cleanup.today,pageId:matches[0].id,...result};
 }
+

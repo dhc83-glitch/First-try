@@ -68,9 +68,9 @@ export function planHomeContent(blocks,report){
       if(b.type.startsWith('heading_'))section=name;
       const ctx={...context,section};
       if(b.type==='callout'&&/^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b/i.test(text)&&!context.section&&!summaryFound&&!/execution order/i.test(text)){
-        change(b,report.cleanup.displayDate+' · task review','Home date');
+        change(b,report.cleanup.displayDate+' · Your day','Home date');
         const summary=b.children?.find(c=>c.type==='paragraph');
-        if(summary){summaryFound=true;change(summary,`${report.cleanup.displayDate}. ${active.length} active tasks; ${done.length} completed/canceled records retained. ${eligible.length} tasks can be considered today; ${followups.filter(t=>t.status==='Waiting').length} follow-ups are waiting. Source checks: ${sources}. The sections below reflect saved Notion tasks. Email interpretation and fresh sports/news verification are still incomplete.`,'Home summary');}
+        if(summary){summaryFound=true;change(summary,`${eligible.length?"Start with "+shortened(eligible[0].title,140)+".":"No next action is confirmed yet."} ${report.cleanup.items?.length||report.automatic?.exceptions?.length?"Some items need attention; open Needs your input. ":""}Email review is incomplete; work times are provisional.`,'Home summary');}
       }
       if(b.type==='paragraph'&&section==='do this next')change(b,next,'Do this next');
       if(b.type==='callout'&&name==='this week s priority'){for(const c of b.children||[])if(c.type==='paragraph')change(c,focus,'This week’s priority');}
@@ -160,3 +160,4 @@ export function planHomeContent(blocks,report){
   warnings.push('Linked database views and their filters are preserved; the Notion API does not expose view-filter editing.');
   return {changes:changes.filter(c=>!homeValueEqual(c.before,c.after,c.field)),coverage:[...new Set(coverage)],warnings};
 }
+

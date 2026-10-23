@@ -32,12 +32,18 @@ async function fixture(t,tasks){
  const schema={id:'source',properties:{'Task name':{type:'title'},Status:{type:'select',select:{options:['To do','Inbox','Done','Canceled'].map(name=>({name}))}},Done:{type:'checkbox'},'Due date':{type:'date'},Start:{type:'date'},'Finish by':{type:'date'},'Commitment time':{type:'date'},'Do date':{type:'date'},'On calendar':{type:'date'},Area:{type:'select'},Priority:{type:'select'},Kind:{type:'select'},'Record basis':{type:'select'},'Next action':{type:'rich_text'},'Effort minutes':{type:'number'},Source:{type:'rich_text'}}};
  const pages=new Map(tasks.map(t=>[t.id,{id:t.id,last_edited_time:'v0',properties:{'Task name':{type:'title',title:[{text:{content:t.title}}]},Status:{type:'select',select:{name:t.status}},Done:{type:'checkbox',checkbox:t.done},'Next action':rich(t.notes),Source:rich(''),Start:date(t.start),'Finish by':date(null),'Commitment time':date(null),'Do date':date(t.doDate),'On calendar':date(null),'Due date':date(t.due),Area:{type:'select',select:null},Priority:{type:'select',select:null},Kind:{type:'select',select:{name:t.kind||'Task'}},'Record basis':{type:'select',select:null},'Effort minutes':{type:'number',number:60}}}]));
  const blocks=new Map([['heading',{id:'heading',type:'callout',last_edited_time:'v0',callout:{rich_text:[{text:{content:'Wednesday · task review'}}]}}],['summary',{id:'summary',type:'paragraph',last_edited_time:'v0',paragraph:{rich_text:[{text:{content:'Old summary'}}]}}]]);
+ const children=new Map([['home',['heading']],['heading',['summary']]]);
+ const addBlock=(input)=>{const b=structuredClone(input),id='block'+(++version);const nested=b[b.type].children;delete b[b.type].children;b.id=id;b.last_edited_time='v'+version;b.has_children=!!nested?.length;blocks.set(id,b);if(nested)children.set(id,nested.map(addBlock));return id;};
  const notion={source:async()=>schema,discover:async()=>[{id:'source',title:'Central Tasks'}],all:async(path,body)=>{
   if(path==='/search')return [{id:'home',properties:{Name:{type:'title',title:[{text:{content:'Home'}}]}}}];
   return structuredClone([...pages.values()].filter(p=>!body?.filter||(body.filter.property==='Source'?p.properties.Source.rich_text.map(x=>x.text.content).join('')===body.filter.rich_text.equals:p.properties['Task name'].title[0].text.content===body.filter.title.equals)));
  },call:async(path,method,body)=>{
   if(path.startsWith('/data_sources/'))return structuredClone(schema);
-  if(path.includes('/children'))return {results:[structuredClone(blocks.get(path.includes('/home/')?'heading':'summary'))],has_more:false};
+  if(path.includes('/children')){
+    const parent=path.split('/')[2];
+    if(method==='PATCH'){writes.push(path);const ids=body.children.map(addBlock);children.set(parent,[...(children.get(parent)||[]),...ids]);blocks.get(parent).has_children=true;return {results:ids.map(id=>structuredClone(blocks.get(id)))};}
+    return {results:(children.get(parent)||[]).map(id=>structuredClone(blocks.get(id))),has_more:false};
+  }
   if(path==='/pages'&&method==='POST'){creates++;const p={id:'new'+creates,last_edited_time:'v'+(++version),properties:structuredClone(body.properties)};pages.set(p.id,p);writes.push(path);return structuredClone(p);}
   const record=(path.startsWith('/pages/')?pages:blocks).get(path.split('/').at(-1));
   if(!record)throw Error('Unexpected path '+path);
@@ -114,4 +120,23 @@ test('dates and missing-score notices never count as reported grades',()=>{
  assert.ok(hasReportedScore('Exam 1 score confirmed by the student: 73.'));
  assert.ok(hasReportedScore('Exam score is 82.'));
  assert.equal(taskTitleCorrections([task('unknown','Quiz — score to capture',{done:true,status:'Done',notes:'Grade/comments released Oct 14. Score is not included in the email.'})]).length,0);
+});
+
+
+test('daily planner installs once, keeps details in toggles and updates the same blocks on tomorrow’s refresh',async t=>{
+ const f=await fixture(t,[task('a','Prepare outline')]);
+ await f.service.refresh();const first=await f.service.applyAutomatic();assert.equal(first.homeUpdated,true);assert.ok(first.homeSections.includes('Daily planner'));
+ const installs=()=>f.writes.filter(p=>p==='/blocks/heading/children').length;
+ assert.equal(installs(),1);
+ const heading=[...f.blocks.values()].find(b=>b.type==='heading_3'&&b.heading_3.rich_text[0].text.content==='Your next 3');assert.ok(heading);
+ await f.service.refresh();await f.service.applyAutomatic();assert.equal(installs(),1);
+ f.setTime(new Date('2026-10-23T18:00:00Z'));await f.service.refresh();const next=await f.service.applyAutomatic();assert.equal(next.homeUpdated,true);assert.equal(installs(),1);
+ assert.match(f.blocks.get('heading').callout.rich_text[0].text.content,/Friday/);
+});
+test('a lost layout-install response blocks later automatic appends rather than creating duplicate planners',async t=>{
+ const f=await fixture(t,[]),original=f.notion.call;let installs=0;
+ f.notion.call=async(path,method,body)=>{const response=await original(path,method,body);if(path==='/blocks/heading/children'&&method==='PATCH'){installs++;throw Error('response lost after successful creation');}return response;};
+ await f.service.refresh();const first=await f.service.applyAutomatic();assert.equal(first.homeUpdated,false);assert.equal(installs,1);
+ const pending=(await f.store.read()).operations.find(o=>o.title==='Update Home dated task summary');assert.equal(pending.status,'needs verification');assert.equal(pending.pendingAppend,'heading');
+ await f.service.refresh();const next=await f.service.applyAutomatic();assert.equal(installs,1);assert.equal(next.homeUpdated,false);assert.ok(next.exceptions.some(e=>/earlier Home update/.test(e.reason)));
 });

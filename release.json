@@ -1,6 +1,6 @@
 {
   "version": "1.1.0",
-  "sha": "589e74572aee6049a316c8b39dcad567eb1a3b36",
+  "sha": "75cd6a82585bc24b66983ab815a0d623fb6aa3c0",
   "files": [
     {
       "path": "PROJECT_GOAL.md",
@@ -12,7 +12,7 @@
     },
     {
       "path": "assistant-service.js",
-      "sha256": "72d70ca9eeb29a7ee70f71df90febb787701a9e2adcf4623e776abddb036fb78"
+      "sha256": "6f7210131d34d74f4128b8e4808e191d7799fab2a1aefbde3c008454b7c309fe"
     },
     {
       "path": "assistant.js",
@@ -152,7 +152,7 @@
     },
     {
       "path": "test/integration-state.test.js",
-      "sha256": "a137bb01ed57f641cc42aefceef967dc951add93ceb210397ff8c005512c78e1"
+      "sha256": "0ed841f89104747b114d2f9e433f7f9d0e07a07dff18e712eb616ec1d4d5ca51"
     },
     {
       "path": "test/launcher.test.js",

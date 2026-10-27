@@ -1,6 +1,6 @@
 {
-  "version": "1.1.0",
-  "sha": "75cd6a82585bc24b66983ab815a0d623fb6aa3c0",
+  "version": "1.1.1",
+  "sha": "c5755e8a94e86d041dd7061c1d62eb15ae815095",
   "files": [
     {
       "path": "PROJECT_GOAL.md",
@@ -8,11 +8,11 @@
     },
     {
       "path": "README.md",
-      "sha256": "d8db13babd44defab436913382b797fb432f0eadfe3bd78133b62ea693695b1a"
+      "sha256": "33f23c9029a6de42a9becc06184e1b768bbdc26f3fdd00e8d165844f1315cbb6"
     },
     {
       "path": "assistant-service.js",
-      "sha256": "6f7210131d34d74f4128b8e4808e191d7799fab2a1aefbde3c008454b7c309fe"
+      "sha256": "3066893bb5bb02178aecdad6edcd8b5f5b7ceb039b1e546fde3492bed4d9f084"
     },
     {
       "path": "assistant.js",
@@ -64,11 +64,11 @@
     },
     {
       "path": "package.json",
-      "sha256": "2db1eb57d27ad3c3e6b9329c13bc9fdf4b53e3424f3c0a9d5fdb6df9222abf90"
+      "sha256": "5046128f65d28e0f978536dc80a180789a3963bfd600ee42d012c2187c28a46b"
     },
     {
       "path": "public/app.js",
-      "sha256": "b13850f33d61191602b7490bf59ab523e3231bcfa1da2a24caec10ee06630e85"
+      "sha256": "bb41980003e41a58b461b91f5d9879889078ac994305ab185af3b12d320ce418"
     },
     {
       "path": "public/briefing.js",
@@ -76,7 +76,7 @@
     },
     {
       "path": "public/index.html",
-      "sha256": "bb0ca1d6bc2c966e7f5d53b365058bd48e39ed46fff2368efec78df356c67631"
+      "sha256": "1c830a1c7a6c2e3b27e3cc43723a23313de05883d0043a2bb314c6288e117573"
     },
     {
       "path": "public/organizer-ui.js",
@@ -100,11 +100,11 @@
     },
     {
       "path": "refresh-job.js",
-      "sha256": "ba31332f0249530e5ff42ba9f80091a088ce8421e9810d9f8be271914c46795c"
+      "sha256": "d2040818150695b890f865dd2e445d6d8dcfac72026a140b455096f66ad2ba48"
     },
     {
       "path": "server.js",
-      "sha256": "861e829e366f7a33a83822db50344a16b310df387c8bc30e5c65ea1ba1de41ed"
+      "sha256": "60ab53bb380aa67f64241bf8325b22fa53c5879e67bab70078b2e7965e4bb0bb"
     },
     {
       "path": "sports.js",
@@ -124,7 +124,7 @@
     },
     {
       "path": "test/automatic.test.js",
-      "sha256": "0b28542802941a06d4866d87d3e723520a117e319111a275598251819bf2c150"
+      "sha256": "400da186ab34385582c0333713dc019ca3205430255d2985770cc0e6384f19f7"
     },
     {
       "path": "test/briefing.test.js",
@@ -176,7 +176,7 @@
     },
     {
       "path": "test/refresh-job.test.js",
-      "sha256": "2e54eaee1cec293d058c9576779a20a9260788495b1e829476cf880b88f37770"
+      "sha256": "73fbf1ad4b7a489bfc2da02d3fc1f377c61769347d827a6e4ee284e8e165d9bf"
     },
     {
       "path": "test/server.test.js",

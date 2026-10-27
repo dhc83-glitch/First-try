@@ -64,7 +64,7 @@ export class Assistant {
     for(const correction of initial.homeCorrections||[]){
       const matches=(initial.sourceTasks||[]).filter(t=>t.title.trim().toLowerCase()===correction.title.trim().toLowerCase());
       if(matches.length!==1){if(matches.length>1)summary.exceptions.push({reason:'Ambiguous saved Home correction: '+correction.title});continue;}
-      const task=matches[0];if(task.done&&correction.action==='done'||['Canceled','Cancelled'].includes(task.status)&&correction.action==='cancel')continue;
+      const task=matches[0];if(isDailyGoal(task)&&correction.action==='done')continue;if(task.done&&correction.action==='done'||['Canceled','Cancelled'].includes(task.status)&&correction.action==='cancel')continue;
       try{await this.resolveTask({taskId:task.id,action:correction.action,note:'Explicit saved Home correction.',confirmed:true},{authorization:batchApproval,runId:initial.latest.id,origin:'your Notion updates'});summary.appliedUpdates++;}
       catch(error){summary.exceptions.push({taskId:task.id,title:task.title,reason:error.message});}
     }
@@ -277,10 +277,11 @@ export class Assistant {
       }
       const corrections=[...(state.homeCorrections||[]),...Object.entries(state.taskDecisions||{}).map(([taskId,d])=>({...d,taskId}))];
       state.sourceTasks=structuredClone(result.tasks);
-      const notionTasks=reconcileTasks(result.tasks,corrections);
+      const effectiveCorrections=corrections.filter(c=>{const target=result.tasks.find(t=>c.taskId===t.id||!c.taskId&&c.title?.trim().toLowerCase()===t.title.trim().toLowerCase());return !target||!isDailyGoal(target)||c.action!=='done'||c.at&&localParts(c.at,'America/New_York').day===localParts(now,'America/New_York').day;});
+      const notionTasks=reconcileTasks(result.tasks,effectiveCorrections);
       result.tasks=notionTasks;
 
-      const cleanup=cleanupReview(result.tasks,state.taskDecisions,now);
+      const cleanup=cleanupReview(result.tasks,Object.fromEntries(Object.entries(state.taskDecisions||{}).filter(([id])=>effectiveCorrections.some(c=>c.taskId===id))),now);
       const issues=auditCentral(result.tasks,now),plan=buildPlan(result.tasks.filter(t=>!cleanup.heldTaskIds.includes(t.id)),now);
       plan.assumptions[2]='Notion Calendar dates from Central Tasks reserve time. Google Calendar events and other databases are not read. General email-to-task creation still requires review.';
       const successfulSlots=new Set(slots.filter((slot,i)=>reads[i+1].status==='fulfilled'&&['checked','incomplete','cached'].includes(reads[i+1].value.status)));

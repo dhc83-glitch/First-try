@@ -8,16 +8,16 @@ import {audit,defaults} from './audit.js';
 import {Store} from './store.js';
 import {Assistant} from './assistant-service.js';
 import {Gmail} from './gmail.js';
-import {RefreshJob} from './refresh-job.js';
+import {RefreshJob,DailyRollover} from './refresh-job.js';
 
-export function createApp({token=process.env.NOTION_TOKEN, databaseId=process.env.NOTION_DATABASE_ID, notion=token?new Notion(token):null,store=new Store(),gmail=new Gmail(),updater=new Updater({restart:process.env.ASSISTANT_MANAGED==='1'?()=>process.send?.({type:'restart'}):null})}={}){
+export function createApp({automaticRollover=false,token=process.env.NOTION_TOKEN, databaseId=process.env.NOTION_DATABASE_ID, notion=token?new Notion(token):null,store=new Store(),gmail=new Gmail(),updater=new Updater({restart:process.env.ASSISTANT_MANAGED==='1'?()=>process.send?.({type:'restart'}):null})}={}){
   const csrf=randomBytes(32).toString('hex'); let snapshot=null; let busy=false;
   const assistant=new Assistant({notion,store,sourceId:databaseId,gmail});
   const job=new RefreshJob(assistant);
   const json=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
   const body=async req=>{let text='';for await(const chunk of req){text+=chunk;if(text.length>65536)throw new Error('Request too large');}return JSON.parse(text||'{}');};
   const id=v=>{if(typeof v!=='string'||!/^[a-f0-9-]{32,36}$/i.test(v))throw new Error('Enter a valid Notion database or data source ID.');return v;};
-  return http.createServer(async(req,res)=>{
+  const server=http.createServer(async(req,res)=>{
     try {
       const host=req.headers.host||'';
       if(!/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(host))return json(res,403,{error:'Local access only'});
@@ -132,9 +132,16 @@ export function createApp({token=process.env.NOTION_TOKEN, databaseId=process.en
       res.writeHead(200,{'Content-Type':path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':'text/html','Cache-Control':'no-store'});res.end(content);
     }catch(e){json(res,400,{error:e.message});}
   });
+  if(automaticRollover){
+    const rollover=new DailyRollover(job,{canRun:()=>!busy&&!updater.busy&&!updater.restarting});
+    const check=()=>rollover.tick().catch(()=>console.error('Daily briefing check failed. Open the assistant page to inspect refresh status.'));
+    let timer;server.on('listening',()=>{timer=setInterval(check,60000);timer.unref();void check();});
+    server.on('close',()=>{clearInterval(timer);job.stop();});
+  }
+  return server;
 }
 if(process.argv[1]===fileURLToPath(import.meta.url)){
- const server=createApp();server.listen(Number(process.env.PORT)||3000,'127.0.0.1',async()=>{
+ const server=createApp({automaticRollover:true});server.listen(Number(process.env.PORT)||3000,'127.0.0.1',async()=>{
    try{await new Store().read();await new Gmail().status();console.log('Personal Assistant running on local port '+(process.env.PORT||3000));process.send?.({type:'ready'});}catch{console.error('Saved records could not be opened. Startup stopped without changing them.');server.close(()=>process.exit(1));}
  });
  process.on('message',m=>{if(m?.type==='shutdown'){server.close(()=>process.exit(0));setTimeout(()=>process.exit(0),4000).unref();}});

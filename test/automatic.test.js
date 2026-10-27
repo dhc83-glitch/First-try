@@ -54,6 +54,28 @@ async function fixture(t,tasks){
  const service=new Assistant({store,notion,gmail,clock:()=>time});
  return {store,pages,blocks,writes,service,notion,creates:()=>creates,setTime:value=>time=value};
 }
+test('Tuesday Home and daily goal publish while the inbox is still blocked; one run keeps the original comparison',async t=>{
+ const f=await fixture(t,[task('daily','Apply to at least 2 internships',{done:true,status:'Done',doDate:{start:'2026-10-26'}})]);
+ f.setTime(new Date('2026-10-27T14:00:00Z'));
+ let release,entered;const inbox=new Promise(r=>release=r),started=new Promise(r=>entered=r);
+ f.service.gmail.readInbox=async slot=>{entered();await inbox;return {slot,status:'checked',messages:[],count:0};};
+ const job=new RefreshJob(f.service);job.start();await started;
+ assert.match(f.blocks.get('heading').callout.rich_text[0].text.content,/Tuesday, October 27/);
+ assert.equal(f.pages.get('daily').properties.Status.select.name,'To do');
+ assert.equal(f.pages.get('daily').properties['Do date'].date.start,'2026-10-27');
+ const early=await f.store.read();assert.equal(early.homePublication.date,'2026-10-27');assert.equal(early.homePublication.status,'verified');
+ release();await job.done;const final=await f.store.read();
+ assert.equal(final.latest.id,early.latest.id);assert.equal(final.history.length,1);assert.equal(final.homePublication.date,'2026-10-27');
+});
+test('task-only automatic rollover never starts Gmail or schedules work',async t=>{
+ const f=await fixture(t,[task('outline','Prepare outline')]);
+ f.service.gmail.readInbox=async()=>{throw Error('Gmail must not run');};
+ const job=new RefreshJob(f.service);job.start({dayOnly:true});await job.done;
+ assert.equal(job.current.status,'complete');assert.equal(job.current.day.homeUpdated,true);
+ assert.equal(f.writes.some(path=>path.startsWith('/pages/')),false);
+ const state=await f.store.read();assert.equal(state.latest.automatic.homeUpdated,true);assert.equal(state.homePublication.status,'verified');
+ assert.ok(state.latest.sources.some(s=>s.status==='cached'));
+});
 test('one Refresh job applies supplied facts, closes past reminders, reuses daily master, dates Home and is repeatable',async t=>{
  const f=await fixture(t,[task('class','Accounting class',{doDate:{start:'2026-10-21'}}),task('quiz','Liabilities quiz',{due:{start:'2026-10-21'}}),task('grade','Check finance grade'),task('trial','Example trial'),task('daily','Apply to 2 internships',{doDate:{start:'2026-10-22'}}),task('duplicate','Apply to 2 internships',{doDate:{start:'2026-10-21'}})]);
  await f.service.saveUpdate({text:'Completed "Check finance grade": grade received 82'});

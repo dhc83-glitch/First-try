@@ -25,7 +25,7 @@ const pendingSources=(state,continuing)=>[
 ];
 export class Assistant {
   constructor({notion,store,sourceId,gmail,clock=()=>new Date(),sportsReader=readSports}){Object.assign(this,{notion,store,sourceId,gmail,clock,sportsReader});this.busy=false;}
-  async state(){const s=await this.store.read();return {latest:s.latest,history:s.history,operations:s.operations||[],organizer:s.organizer||{revision:0,items:[],history:[]},updates:s.updates||[],automatic:s.automatic||null,settings:{emailLookbackDays:s.settings?.emailLookbackDays||14},configured:!!this.notion};}
+  async state(){const s=await this.store.read();return {latest:s.latest,publication:s.homePublication||s.latest?.publication,history:s.history,operations:s.operations||[],organizer:s.organizer||{revision:0,items:[],history:[]},updates:s.updates||[],automatic:s.automatic||null,settings:{emailLookbackDays:s.settings?.emailLookbackDays||14},configured:!!this.notion};}
   async organizerEdit(input){return editOrganizer(this,input);}
   async recoveryPreview(input){
     if(this.busy)throw Error('Wait until the refresh or update finishes.');
@@ -52,6 +52,28 @@ export class Assistant {
     if(typeof text!=='string'||!text.trim()||text.length>2000)throw new Error('Enter an update of 1–2,000 characters.');
     this.busy=true;
     try{const state=await this.store.read();if((state.updates||[]).some(u=>u.status==='pending'&&u.text===text.trim()))return {saved:true,alreadyQueued:true};state.updates=[...(state.updates||[]),{id:randomUUID(),text:text.trim(),status:'pending',at:this.clock().toISOString()}];await this.store.write(state);return {saved:true};}finally{this.busy=false;}
+  }
+  async publishHome(){
+    const state=await this.store.read();
+    const pending=state.operations?.find(o=>o.title==='Update Home dated task summary'&&o.status!=='verified');
+    if(pending)await this.inspectHomeOperation(pending.id);
+    const preview=await this.homePreview();
+    await this.approveHome({previewId:preview.id,confirmed:true});
+    return {homeUpdated:true,homeBlocksUpdated:preview.changes.length+(preview.appends||[]).reduce((n,a)=>n+a.children.length,0),homeSections:preview.coverage,homeWarnings:preview.warnings};
+  }
+  async refreshDay(){
+    // Publish fresh task dates before any Gmail work. Cached mail remains labelled
+    // cached, and this phase never approves work times or interprets queued updates.
+    await this.refresh({taskOnly:true});
+    const exceptions=[];
+    try{await this.maintainDailyGoal();}catch(error){exceptions.push({reason:'Daily goal: '+error.message});}
+    await this.refresh({taskOnly:true,internal:true});
+    const state=await this.store.read();
+    state.latest.automatic={closedReminders:0,appliedUpdates:0,scheduled:0,dailyGoalUpdates:0,homeUpdated:false,exceptions};await this.store.write(state);
+    let result;
+    try{result={...await this.publishHome(),exceptions};}
+    catch(error){result={homeUpdated:false,exceptions:[...exceptions,{reason:'Home summary: '+error.message}]};}
+    const saved=await this.store.read();Object.assign(saved.latest.automatic,result);await this.store.write(saved);return result;
   }
   async applyAutomatic({onPhase=()=>{}}={}){
     onPhase("Applying saved updates");
@@ -136,10 +158,8 @@ export class Assistant {
     await this.refresh({taskOnly:true,internal:true});
     state=await this.store.read();state.latest.sources=coverage?coverage.map(s=>s.name==='Central Tasks'?state.latest.sources.find(c=>c.name==='Central Tasks')||s:s):state.latest.sources;state.latest.status=coverageStatus||state.latest.status;state.latest.automatic=summary;await this.store.write(state);
     try{
-      const pendingHome=state.operations?.find(o=>o.title==='Update Home dated task summary');
-      if(pendingHome&&pendingHome.status!=='verified')await this.inspectHomeOperation(pendingHome.id);
       onPhase('Updating Home sections');
-      const preview=await this.homePreview();await this.approveHome({previewId:preview.id,confirmed:true});summary.homeUpdated=true;summary.homeBlocksUpdated=preview.changes.length+(preview.appends||[]).reduce((n,a)=>n+a.children.length,0);summary.homeSections=preview.coverage;summary.homeWarnings=preview.warnings;}catch(error){summary.exceptions.push({reason:'Home summary: '+error.message});}
+      Object.assign(summary,await this.publishHome());}catch(error){summary.exceptions.push({reason:'Home summary: '+error.message});}
     state=await this.store.read();state.automatic=summary;state.latest.automatic=summary;await this.store.write(state);return summary;
   }
   async recordUpdateOutcome(id,status,detail){const state=await this.store.read();const update=state.updates?.find(u=>u.id===id);if(update){update.status=status;update.detail=detail;await this.store.write(state);}}
@@ -232,15 +252,15 @@ export class Assistant {
     this.busy=true;
     try{const state=await this.store.read();state.settings={...state.settings,emailLookbackDays:days};if(state.latest)state.latest.needsRefresh=true;state.homePreview=null;await this.store.write(state);return {saved:true,days};}finally{this.busy=false;}
   }
-  async refresh({continueCatchup=false,taskOnly=false,internal=false}={}){
+  async refresh({continueCatchup=false,taskOnly=false,internal=false,sameRun=false}={}){
     if(this.busy)throw new Error('A refresh or update is already running. Wait for it to finish.');
     this.busy=true;
     let state,run;
     try {
       state=await this.store.read();const now=this.clock();
       const previous=state.latest;const originalBaseline=state.baseline;
-      if(!internal&&!continueCatchup)state.refreshBaseline=structuredClone(state.baseline);
-      run={id:(internal||continueCatchup)&&previous?.id?previous.id:randomUUID(),startedAt:(internal||continueCatchup)&&previous?.startedAt?previous.startedAt:now.toISOString(),status:'running',sources:[{name:'Central Tasks',status:'checking'},...pendingSources(state,continueCatchup)]};
+      if(!internal&&!continueCatchup&&!sameRun)state.refreshBaseline=structuredClone(state.baseline);
+      run={id:(internal||continueCatchup||sameRun)&&previous?.id?previous.id:randomUUID(),startedAt:(internal||continueCatchup||sameRun)&&previous?.startedAt?previous.startedAt:now.toISOString(),status:'running',publication:state.homePublication||previous?.publication,sources:[{name:'Central Tasks',status:'checking'},...pendingSources(state,continueCatchup)]};
       state.latest=run;await this.store.write(state);
       if(!this.notion)throw new Error('Notion is not connected to this app.');
       const slots=['personal','school','professional'];
@@ -265,7 +285,7 @@ export class Assistant {
       run.sources=[{name:'Central Tasks',status:reads[0].status==='fulfilled'?'checked':'failed'},...mailSources,{name:'Notion Calendar task dates',status:reads[0].status==='fulfilled'?'checked':'failed',optional:true,detail:'Dates in Central Tasks are included. Google Calendar events and other Notion databases are outside this check.'}];
       if(reads[0].status==='rejected')throw reads[0].reason;
       const result=reads[0].value;
-      if(!internal&&!continueCatchup){
+      if(!internal&&!continueCatchup&&!sameRun){
         try{
           const pages=await this.notion.all('/search',{query:'Home',filter:{value:'page',property:'object'}});
           const homes=pages.filter(p=>rich(Object.values(p.properties||{}).find(v=>v.type==='title')?.title).toLowerCase()==='home');
@@ -468,8 +488,8 @@ export class Assistant {
           operation.pendingAppend=null;await this.store.write(state);
         }
         for(const change of preview.changes.filter(marker).sort((a,b)=>Number(a.section==='Home date')-Number(b.section==='Home date')))await applyChange(change);
-        operation.status='verified';state.latest.publication={status:'verified',runId:state.latest.id,at:this.clock().toISOString()};await this.store.write(state);return {updated:true,verified:true};
-      }catch(error){state.latest.publication={status:'partial',runId:state.latest.id,at:this.clock().toISOString()};operation.status='needs verification';operation.detail=error.message;await this.store.write(state);throw new Error('Home may be partially updated. Inspect the reported sections before trying again. The original text was retained in the private operation record.');}
+        operation.status='verified';state.homePublication=state.latest.publication={status:'verified',date:preview.date,runId:state.latest.id,at:this.clock().toISOString()};await this.store.write(state);return {updated:true,verified:true};
+      }catch(error){state.homePublication=state.latest.publication={status:'partial',date:preview.date,runId:state.latest.id,at:this.clock().toISOString()};operation.status='needs verification';operation.detail=error.message;await this.store.write(state);throw new Error('Home may be partially updated. Inspect the reported sections before trying again. The original text was retained in the private operation record.');}
     }finally{this.busy=false;}
   }
   async approve(proposalId,confirmed,batch){

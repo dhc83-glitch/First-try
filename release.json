@@ -1,0 +1,198 @@
+{
+  "version": "1.1.0",
+  "sha": "589e74572aee6049a316c8b39dcad567eb1a3b36",
+  "files": [
+    {
+      "path": "PROJECT_GOAL.md",
+      "sha256": "ac80184ab2fa1e878ced303dff2c786c3c3fd3b810658e1f5273590bb3fd3140"
+    },
+    {
+      "path": "README.md",
+      "sha256": "d8db13babd44defab436913382b797fb432f0eadfe3bd78133b62ea693695b1a"
+    },
+    {
+      "path": "assistant-service.js",
+      "sha256": "72d70ca9eeb29a7ee70f71df90febb787701a9e2adcf4623e776abddb036fb78"
+    },
+    {
+      "path": "assistant.js",
+      "sha256": "b5a5af35c0bad0c2176bde3c1f1509b2873ea8c8bccc878ef50f8b209d05105a"
+    },
+    {
+      "path": "audit.js",
+      "sha256": "f2fd7085362887f8fe81bdf9677d238a10c5d47be872aab26c36e497c24c1cc4"
+    },
+    {
+      "path": "automatic.js",
+      "sha256": "95e8f0d7ffe8d76d896a25cb2476618e14523907fa5122e2df75e14f9e782fad"
+    },
+    {
+      "path": "cleanup.js",
+      "sha256": "ba9dddd62120d1254c27dd03da7c14ae24dea6404a70ef8ad58fb19d91d0f082"
+    },
+    {
+      "path": "correspondence.js",
+      "sha256": "654dd5358aa8d23c33e05c5b44bad9c7d6c6f96f9bc90c59ca74ceef979009ec"
+    },
+    {
+      "path": "daily-planner.js",
+      "sha256": "051db05a51adda45cc5ffdeed3278b280e877b36decc1789fe6cead327a2caaf"
+    },
+    {
+      "path": "gmail.js",
+      "sha256": "ee719fd4330e94eeaf7e16bb42651175b487d5534a8ed86f944793e797bd95e2"
+    },
+    {
+      "path": "home-content.js",
+      "sha256": "73a13c796cf0383a90ea2629e45c2bcf7f33bafed14692650ed533f1bec44dc9"
+    },
+    {
+      "path": "home-summary.js",
+      "sha256": "aa057f9f71d4866083a39241d4643f65f802fc4045823594fc8f09144d1777a8"
+    },
+    {
+      "path": "launcher.js",
+      "sha256": "62f653e946f934b648d7c51e023ff5628c6364331504cb074ac3e840d350b0ef"
+    },
+    {
+      "path": "notion.js",
+      "sha256": "d17435994e3ac02d88fdc18572db6642afc017df6c9f16ed17386b5bb1a84f62"
+    },
+    {
+      "path": "organizer.js",
+      "sha256": "690898655e90d10c2efa4cacdc0276ee8f28122eedaea333f01db127713a53d3"
+    },
+    {
+      "path": "package.json",
+      "sha256": "2db1eb57d27ad3c3e6b9329c13bc9fdf4b53e3424f3c0a9d5fdb6df9222abf90"
+    },
+    {
+      "path": "public/app.js",
+      "sha256": "b13850f33d61191602b7490bf59ab523e3231bcfa1da2a24caec10ee06630e85"
+    },
+    {
+      "path": "public/briefing.js",
+      "sha256": "83355dd9c485da10f005ba48e2252c2802f99e48af90a3dca0dd49400dfaccf7"
+    },
+    {
+      "path": "public/index.html",
+      "sha256": "bb0ca1d6bc2c966e7f5d53b365058bd48e39ed46fff2368efec78df356c67631"
+    },
+    {
+      "path": "public/organizer-ui.js",
+      "sha256": "d337d8e754127a18137abdd979b6b30e0c448e57c6c27a6f2bd6ec4221c9845b"
+    },
+    {
+      "path": "public/planning.js",
+      "sha256": "06ca23bd282a151dc56d0de3a0b89852dffedfca3691892ad775a4c475f2115f"
+    },
+    {
+      "path": "public/style.css",
+      "sha256": "9c6ef3c59bb069c8b9fcc36b99f43048be596cd41fa2fa46cf1e894c72ca1e84"
+    },
+    {
+      "path": "public/task-state.js",
+      "sha256": "1a485c4498d402b3f2a2664edaac5ac92f89e763218ebce0414b4021d00d803d"
+    },
+    {
+      "path": "recovery.js",
+      "sha256": "be020fb2c1eb0c476f6be248c3541c0c043ee5d405a85989e63cfede691fb0fa"
+    },
+    {
+      "path": "refresh-job.js",
+      "sha256": "ba31332f0249530e5ff42ba9f80091a088ce8421e9810d9f8be271914c46795c"
+    },
+    {
+      "path": "server.js",
+      "sha256": "861e829e366f7a33a83822db50344a16b310df387c8bc30e5c65ea1ba1de41ed"
+    },
+    {
+      "path": "sports.js",
+      "sha256": "bb30ca4564d82b7e9b40c4ec6b47585e12eecca904c5bbccb0b514418baf55bf"
+    },
+    {
+      "path": "store.js",
+      "sha256": "88e30b9a6f300162e34cf668c3fb85d64eab653bd2aafe21c2361e9fb1756d53"
+    },
+    {
+      "path": "test/assistant.test.js",
+      "sha256": "703f31ef5c2290a0357a4c7809daddf98aff32386164170a425b3f44132a7d71"
+    },
+    {
+      "path": "test/audit.test.js",
+      "sha256": "3ecfc48e6990241ee9f9ff4f3a47e13a62ece82158024c8ea0aa331b396af575"
+    },
+    {
+      "path": "test/automatic.test.js",
+      "sha256": "0b28542802941a06d4866d87d3e723520a117e319111a275598251819bf2c150"
+    },
+    {
+      "path": "test/briefing.test.js",
+      "sha256": "bc08856b2ed9594023ce777f53876e68541950a97500b158d140381121978725"
+    },
+    {
+      "path": "test/cleanup.test.js",
+      "sha256": "42c701baf9dad0146bfaae174225362f1f94e4f0d7df06cda49a4d2324744f63"
+    },
+    {
+      "path": "test/correspondence.test.js",
+      "sha256": "0b3cdd4fb5abe1b3ab04594e8a843305d42b6abcfd2b840262c235222e691384"
+    },
+    {
+      "path": "test/daily-planner.test.js",
+      "sha256": "e87f7e3326191aea71c896d2f0f518ce66001d1e640061d582aa3457a0179b2d"
+    },
+    {
+      "path": "test/gmail.test.js",
+      "sha256": "be3d57589553e44c3c541cd818d04d67b95d872713d6406dfcba2bd5625ecd86"
+    },
+    {
+      "path": "test/home-content.test.js",
+      "sha256": "0793b57ae997519cbab9fe41abc30d69c0c67760518bab79b0f73a5314674f3d"
+    },
+    {
+      "path": "test/integration-state.test.js",
+      "sha256": "a137bb01ed57f641cc42aefceef967dc951add93ceb210397ff8c005512c78e1"
+    },
+    {
+      "path": "test/launcher.test.js",
+      "sha256": "f1f663eac9a249b51bd902007ea90d30fa6419d6258c0c0703275e0f8a43647f"
+    },
+    {
+      "path": "test/notion.test.js",
+      "sha256": "dbefd19212d8faf7ab1cdba9cfeabe212b71dbb4f8c59b1345cd951f8d5d99db"
+    },
+    {
+      "path": "test/organizer.test.js",
+      "sha256": "82efaef09170ab39c8673cda69a3ff0c43182f0e9ea2a00046e4d0e30fab0ed1"
+    },
+    {
+      "path": "test/planning.test.js",
+      "sha256": "bcfb9f14b6153af11c36c6f7aa722fed189c1114549edf5e2eda76524743d1f0"
+    },
+    {
+      "path": "test/recovery.test.js",
+      "sha256": "862c6679fa697ddf7b7085f7e65cbee8409a3b8fcc417dc8e38640c7b16602fe"
+    },
+    {
+      "path": "test/refresh-job.test.js",
+      "sha256": "2e54eaee1cec293d058c9576779a20a9260788495b1e829476cf880b88f37770"
+    },
+    {
+      "path": "test/server.test.js",
+      "sha256": "763120901dbb98317dcd042db183a9449aa7928b2a98123dcc39e69d3159624f"
+    },
+    {
+      "path": "test/sports.test.js",
+      "sha256": "31e083cf40a3171c941ba69a3ff1dfbed388e3c60af81b48b17a5dc2cb119263"
+    },
+    {
+      "path": "test/updater.test.js",
+      "sha256": "aee283c45d6c7123c42b2bf3c3071bd85fc2c4947a8769ca32fc6d8708272f4c"
+    },
+    {
+      "path": "updater.js",
+      "sha256": "73afe3809dbf2da1f54ceb201e6ae2a760faae9b9cd131c370b693b0c16d5009"
+    }
+  ]
+}

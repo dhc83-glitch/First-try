@@ -8,7 +8,7 @@ function fixture(){return [block('date','callout','Wednesday · old',[block('sum
 test('Home is rebuilt across priority, execution and weekly rows; completed work disappears from current instructions',()=>{
  const tree=fixture(),plan=planHomeContent(tree,report),text=id=>plan.changes.find(c=>c.id===id)?.after.map(x=>x.text?.content||'').join('');
  for(const id of ['next','focus-body','exec','exec-body']){assert.ok(text(id));assert.doesNotMatch(text(id),/Wednesday|submit example survey/i);}
- assert.match(text('next'),/Thursday.*Prepare next exam/);assert.ok(plan.changes.some(c=>c.id==='day3'&&c.field==='cells'));assert.ok(plan.changes.find(c=>c.id==='day3').after[0][0].text.content.includes('TODAY'));assert.equal(plan.changes.some(c=>c.id==='old'),false);
+ assert.match(text('next'),/Thursday.*Prepare next exam/);assert.ok(plan.changes.some(c=>c.id==='day0'&&c.field==='cells'));assert.ok(plan.changes.find(c=>c.id==='day0').after[0][0].text.content.includes('TODAY'));assert.equal(plan.changes.some(c=>c.id==='old'),false);
  assert.ok(plan.coverage.includes('Execution plan'));assert.ok(plan.coverage.includes('Weekly schedule'));
  for(const c of plan.changes){const apply=rows=>{for(const b of rows){if(b.id===c.id)b[b.type][c.field]=structuredClone(c.after);if(b.children)apply(b.children);}};apply(tree);}
  const again=planHomeContent(tree,report);assert.equal(again.changes.length,0,JSON.stringify(again.changes.map(c=>({id:c.id,before:c.before,after:c.after}))));

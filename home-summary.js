@@ -1,3 +1,4 @@
+import {homeDecisions,reconcileTasks} from './public/task-state.js';
 import {randomUUID} from 'node:crypto';
 import {planDailyPlanner} from './daily-planner.js';
 import {rich} from './notion.js';
@@ -12,6 +13,7 @@ export async function previewHome(notion,report){
   // Older API fixtures/blocks may omit has_children on the dated callout.
   const dated=tree.find(b=>b.type==='callout'&&/^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b/i.test(rich(b.callout.rich_text)));
   if(dated&&!dated.children)dated.children=(await notion.call('/blocks/'+dated.id+'/children?page_size=100')).results;
+  report={...report,tasks:reconcileTasks(report.tasks,homeDecisions(tree))};
   const result=planHomeContent(tree,report);
   if(!dated)throw new Error('The existing dated Home callout was not found. No page was changed.');
   if(!dated.children?.some(b=>b.type==='paragraph'))throw new Error('The dated callout has no supported summary paragraph. No page was changed.');

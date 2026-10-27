@@ -1,3 +1,4 @@
+import {localTasks} from './public/task-state.js';
 import {randomUUID} from 'node:crypto';
 import {dayOf} from './public/briefing.js';
 
@@ -21,7 +22,7 @@ export function reminderFields(input){
   const lastContact=text(input.lastContact||'',10);if(lastContact&&!validDay(lastContact))throw Error('Enter a valid last-contact date.');
   if(!Array.isArray(input.checklist||[])||(input.checklist||[]).length>30)throw Error('Use up to 30 checklist items.');
   const checklist=(input.checklist||[]).map(item=>{const label=text(item.label,300);if(!label)throw Error('Checklist items need text.');return {label,done:item.done===true};});
-  return {title,kind,due,repeat,contact,location,notes,lastContact,checklist};
+  return {title,kind,due,repeat,contact,location,notes,lastContact,checklist,notionTaskId:text(input.notionTaskId||'',80)};
 }
 export function nextOccurrence(due,repeat,after,anchorDay=Number(due.slice(8)),anchorMonth=Number(due.slice(5,7))){
   if(!validDay(due)||!validDay(after)||!['daily','weekly','monthly','yearly'].includes(repeat))throw Error('Invalid recurrence.');
@@ -50,6 +51,7 @@ export async function editOrganizer(assistant,input){
     const item=org.items.find(i=>i.id===input.id);
     if(input.action==='save'){
       const fields=reminderFields(input.item||{});
+      if(fields.notionTaskId&&!state.latest?.tasks?.some(t=>t.id===fields.notionTaskId))throw Error('Choose a current Notion task to link.');
       if(input.id&&!item)throw Error('Reminder not found.');
       if(item){
         if(item.closed)throw Error('Restore a closed reminder from history before editing.');
@@ -75,6 +77,10 @@ export async function editOrganizer(assistant,input){
         item.lastCompletedAt=now;item.due=nextOccurrence(item.due,item.repeat,today,item.anchorDay,item.anchorMonth);
         item.checklist=item.checklist.map(c=>({...c,done:false}));
       }else {item.closed=true;item.closedAt=now;item.closedReason=input.action;}
+      if(input.action==='complete'&&item.notionTaskId){
+        const linked=state.latest?.tasks?.find(t=>t.id===item.notionTaskId);if(!linked)throw Error('The linked task must be refreshed before completion.');
+        state.updates=[...(state.updates||[]),{id:randomUUID(),text:'Completed linked task: '+linked.title,status:'pending',at:now,organizerEventId:historyId,decision:{taskId:linked.id,title:linked.title,action:'done'}}];
+      }
       if(input.action==='complete')org.completions.push({id:historyId,itemId:item.id,title:item.title,at:now});
     }else if(input.action==='restore'){
       // Only the newest revision can be undone; this cannot erase subsequent edits.
@@ -82,9 +88,10 @@ export async function editOrganizer(assistant,input){
       if(!entry||entry.id!==input.historyId||entry.action==='restore')throw Error('Only the most recent organizer change can be restored.');
       org.items=structuredClone(entry.before);
       org.completions=org.completions.filter(c=>c.id!==entry.id);
+      for(const update of state.updates||[])if(update.organizerEventId===entry.id&&update.status==='pending'){update.status='superseded';update.detail='Organizer completion was restored before Refresh.';}
     }else throw Error('Unsupported organizer action.');
     org.completions=org.completions.filter(c=>Date.parse(c.at)>=Date.parse(now)-90*86400000).slice(-500);
     org.revision++;org.history=[{id:historyId,at:now,action:input.action,title:item?.title||input.item?.title||'Organizer',...(input.action==='restore'?{undoneId:input.historyId}:{}),before},...org.history].slice(0,30);
-    state.organizer=org;await assistant.store.write(state);return {saved:true,revision:org.revision};
+    state.organizer=org;if(state.latest){state.latest.organizerTasks=localTasks(org);state.latest.needsRefresh=true;}await assistant.store.write(state);return {saved:true,revision:org.revision};
   }finally{assistant.busy=false;}
 }

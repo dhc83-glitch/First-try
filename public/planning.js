@@ -1,3 +1,4 @@
+import {rankedActions} from './task-state.js';
 import {dayOf,findTasks} from './briefing.js';
 export function shiftDay(day,amount){const d=new Date(day+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+amount);return d.toISOString().slice(0,10);}
 function remainingCapacity(tasks,now){
@@ -16,10 +17,8 @@ function remainingCapacity(tasks,now){
 }
 export function dailyPriorities(report,now=new Date()){
   const today=dayOf(now),rank={ASAP:0,High:1,Normal:2,Low:3},capacity=remainingCapacity(report?.tasks||[],now);
-  const blocked=new Set((report?.issues||[]).filter(i=>['Different schedule fields','Completion mismatch','Overlap','Invalid schedule'].includes(i.type)).flatMap(i=>[i.taskId,...(i.related||[])]));
-  const active=findTasks(report?.tasks||[]).filter(t=>t.status!=='Waiting'&&t.basis!=='Needs confirmation'&&t.kind!=='Fixed commitment'&&!blocked.has(t.id)&&(!t.doDate?.start||dayOf(t.doDate.start)<=today)&&!(t.schedules||[]).some(s=>dayOf(s.start)>today));
+  const active=rankedActions(report,today);
   const score=t=>dayOf(t.due?.start)&&dayOf(t.due.start)<=today?0:dayOf(t.doDate?.start)===today?1:2;
-  active.sort((a,b)=>score(a)-score(b)||(rank[a.priority]??2)-(rank[b.priority]??2)||(a.due?.start||'9999').localeCompare(b.due?.start||'9999')||a.id.localeCompare(b.id));
   let minutes=0;const chosen=[];
   for(const task of active){const effort=task.effort||60;if(!Number.isFinite(effort)||effort<1||effort>120||minutes+effort>capacity)continue;chosen.push({task,minutes:effort,reason:score(task)===0?'Deadline today or overdue':score(task)===1?'Planned for today':(task.priority||'Normal')+' priority'});minutes+=effort;if(chosen.length===3)break;}
   return {items:chosen,minutes,capacity};

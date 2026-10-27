@@ -25,12 +25,13 @@ export function createOrganizer({api,el,say,reload,format,taskLink}){
   captureForm.onsubmit=async e=>{e.preventDefault();captureSave.disabled=true;try{await api('assistant/capture',{requestId,title:captureTitle.value,due:captureDue.value,area:captureArea.value,nextAction:captureNext.value});captureForm.reset();requestId=crypto.randomUUID();say('Task saved. Click Refresh to create it in Notion.');await reload();}catch(error){say(error.message,true);}finally{captureSave.disabled=busy;}};
 
   const local=group('Personal organizer');local.id='localOrganizerView';local.open=true;
-  local.append(el('p','Reminders, follow-ups, preparation, and errands saved on this computer. They are separate from Central Tasks. Due reminders appear here when you open the app; notifications are not sent.','hint'));
+  local.append(el('p','Reminders, follow-ups, preparation, and errands saved on this computer. Completing a linked item queues its Notion completion for Refresh. They are separate from Central Tasks. Due reminders appear here when you open the app; notifications are not sent.','hint'));
   const formDetails=group('Add a reminder, follow-up, appointment, or errand');formDetails.id='organizerFormView';
   const form=el('form'),kind=options([['reminder','Recurring or one-time reminder'],['followup','Follow-up'],['appointment','Appointment preparation'],['errand','Shopping / errand']]),title=input(),due=input('date'),repeat=options([['none','Once'],['daily','Daily'],['weekly','Weekly'],['monthly','Monthly'],['yearly','Yearly']]),contact=input('text',150),lastContact=input('date'),location=input('text',200),notes=el('textarea'),checklist=el('textarea');title.required=true;notes.maxLength=1500;checklist.maxLength=9000;notes.rows=2;checklist.rows=4;
   const repeatLabel=label('Repeat',repeat),contactLabel=label('Person or organization',contact),lastLabel=label('Last contacted (optional)',lastContact),locationLabel=label('Store or location (optional)',location),checkLabel=label('Checklist — one item per line',checklist);
   const dueLabel=label('Reminder date (optional)',due),grid=el('div',undefined,'grid');grid.append(label('Type',kind),label('Title',title),dueLabel,repeatLabel,contactLabel,lastLabel,locationLabel);
   const template=button('Use appointment preparation checklist',()=>{if(checklist.value.trim()&&!confirm('Replace this draft checklist with the preparation template?'))return;checklist.value='Confirm time and location\nGather documents\nWrite down questions\nPlan travel and arrival time';});
+  const linkedTask=options([['','No linked Notion task']]);grid.append(label('Linked Notion task (optional)',linkedTask));
   const save=el('button','Save in personal organizer');save.type='submit';
   const reset=()=>{editing=null;editingRevision=null;form.reset();save.textContent='Save in personal organizer';formDetails.firstChild.textContent='Add a reminder, follow-up, appointment, or errand';updateKind();};
   const cancel=button('Clear draft',reset);
@@ -39,14 +40,14 @@ export function createOrganizer({api,el,say,reload,format,taskLink}){
   kind.onchange=updateKind;updateKind();
   form.onsubmit=async e=>{e.preventDefault();save.disabled=true;try{
     const previous=state.organizer.items.find(i=>i.id===editing),checks=checklist.value.split('\n').map(s=>s.trim()).filter(Boolean).map(label=>({label,done:previous?.checklist?.find(c=>c.label===label)?.done||false}));
-    await mutate({action:'save',id:editing,...(editing?{revision:editingRevision}:{}),item:{kind:kind.value,title:title.value,due:due.value,repeat:kind.value==='reminder'?repeat.value:'none',contact:kind.value==='followup'?contact.value:'',lastContact:kind.value==='followup'?lastContact.value:'',location:['appointment','errand'].includes(kind.value)?location.value:'',notes:notes.value,checklist:checks}});reset();say('Saved in your personal organizer.');
+    await mutate({action:'save',id:editing,...(editing?{revision:editingRevision}:{}),item:{notionTaskId:linkedTask.value,kind:kind.value,title:title.value,due:due.value,repeat:kind.value==='reminder'?repeat.value:'none',contact:kind.value==='followup'?contact.value:'',lastContact:kind.value==='followup'?lastContact.value:'',location:['appointment','errand'].includes(kind.value)?location.value:'',notes:notes.value,checklist:checks}});reset();say('Saved in your personal organizer.');
   }catch(error){say(error.message,true);}finally{save.disabled=busy;}};
   const filter=options([['open','All open items'],['due','Due now'],['reminder','Reminders'],['followup','Follow-ups'],['appointment','Appointment preparation'],['errand','Shopping / errands'],['closed','Closed items']]);
   const list=el('div'),history=group('Organizer history and restore');history.id='organizerHistoryView';const historyBody=el('div');history.append(historyBody);local.append(label('Show organizer items',filter),list,history);root.append(local);filter.onchange=renderItems;
   const changes=group('Inspect or restore a Notion change');changes.id='recoveryView';const changeBody=el('div');changes.append(el('p','Supported verified task edits can be restored after a preview. Later edits block restore. Home sections and task creation are available for inspection only.','hint'),changeBody);root.append(changes);
   const dialog=el('dialog'),dialogBody=el('div');dialog.append(dialogBody);document.body.append(dialog);
   async function mutate(payload){await api('assistant/organizer',{revision,...payload});await reload();}
-  function edit(item){editing=item.id;editingRevision=revision;kind.value=item.kind;title.value=item.title;due.value=item.due;repeat.value=item.repeat;contact.value=item.contact;lastContact.value=item.lastContact;location.value=item.location;notes.value=item.notes;checklist.value=item.checklist.map(c=>c.label).join('\n');updateKind();save.textContent='Save changes';formDetails.firstChild.textContent='Edit '+item.title;formDetails.open=true;title.focus();formDetails.scrollIntoView({behavior:'smooth',block:'center'});}
+  function edit(item){editing=item.id;editingRevision=revision;linkedTask.value=item.notionTaskId||'';kind.value=item.kind;title.value=item.title;due.value=item.due;repeat.value=item.repeat;contact.value=item.contact;lastContact.value=item.lastContact;location.value=item.location;notes.value=item.notes;checklist.value=item.checklist.map(c=>c.label).join('\n');updateKind();save.textContent='Save changes';formDetails.firstChild.textContent='Edit '+item.title;formDetails.open=true;title.focus();formDetails.scrollIntoView({behavior:'smooth',block:'center'});}
   function renderItems(){
     if(!state)return;list.replaceChildren();const today=dayOf(new Date()),all=state.organizer.items;
     const visible=all.filter(i=>filter.value==='closed'?i.closed:!i.closed&&(filter.value==='open'||filter.value==='due'&&i.due&&i.due<=today||i.kind===filter.value)).sort((a,b)=>(a.location||'').localeCompare(b.location||'')||(a.due||'9999').localeCompare(b.due||'9999')||a.title.localeCompare(b.title));
@@ -85,7 +86,10 @@ export function createOrganizer({api,el,say,reload,format,taskLink}){
     const fill=()=>{more.remove();for(const op of state.operations.slice(shown,shown+15)){
       const detail=group(format(op.at)+' · '+op.title+' · '+op.status);const pre=el('pre');
       const fields=op.properties?Object.fromEntries(Object.keys(op.properties).map(k=>[k,{before:op.before?.[k],after:op.properties[k]}])):{original:op.before||'No saved original',detail:op.detail||op.action||'Task creation'};
-      pre.textContent=JSON.stringify(fields,null,2);detail.append(pre);
+      pre.textContent=JSON.stringify(fields,null,2);detail.append(pre);if(op.outcome)detail.append(el('p',op.outcome,'hint'));
+      if(op.title==='Update Home dated task summary'&&op.status!=='verified'){
+        const inspect=button('Inspect interrupted Home update',async()=>{const preview=await api('assistant/home-recovery-preview',{id:op.id});if(!confirm(preview.applied+' sections match the intended result; '+preview.notApplied+' retain their original values. Confirm this inspection so the next Refresh can build a fresh Home update? No old writes will be replayed.'))return;await api('assistant/recover-home',{id:op.id,confirmed:true});await reload();say('Inspection saved. Click Refresh to build Home from current records.');});inspect.disabled=busy;detail.append(inspect);
+      }
       if(op.before&&op.properties&&op.taskId&&op.status==='verified'&&!op.restoredBy&&op.action!=='restore'){
         const b=button('Preview restore',async()=>{
           const preview=await api('assistant/recovery-preview',{id:op.id});
@@ -97,10 +101,10 @@ export function createOrganizer({api,el,say,reload,format,taskLink}){
     }shown+=15;if(shown<state.operations.length)changeBody.append(more);};fill();
   }
   function renderPlanning(){
-    const report=state.latest,p=dailyPriorities(report);priorityBody.replaceChildren();
+    const report=state.latest,stale=report?.finishedAt&&dayOf(report.finishedAt)!==dayOf(new Date()),p=stale?{items:[],capacity:0}:dailyPriorities(report,new Date(report?.finishedAt||Date.now()));priorityBody.replaceChildren();
     priorityBody.append(el('p','Up to three suggestions within '+p.capacity+' minutes of remaining recorded availability (capped at two hours). Review external commitments first.','hint'));
     for(const item of p.items)priorityBody.append(taskCard(item.task,item.reason+' · '+item.minutes+' min'+(!item.task.effort?' estimated':'')));
-    if(!p.items.length)priorityBody.append(el('p','No suitable short tasks fit the remaining recorded time. Check deadlines and unresolved decisions in the weekly review.'));
+    if(!p.items.length)priorityBody.append(el('p',stale?'This task snapshot is from an earlier day. Refresh to rebuild your priorities.':'No suitable short tasks fit the remaining recorded time. Check deadlines and unresolved decisions in the weekly review.'));
     const review=weeklyReview(report,state.operations,state.organizer);weeklyBody.replaceChildren(el('p','Review window: '+review.since+' through today. Upcoming deadlines: tomorrow through '+review.through+'. Completion totals use this app’s retained history; restored changes are excluded. Completions made directly in Notion may be missing.','hint'));
     const sections=[['Recorded completions',review.completed,i=>el('p',i.title+' · '+format(i.at)+' · '+i.source)],['Overdue work',review.overdue,t=>taskCard(t,'Due '+format(t.due.start))],['Deadlines in the next seven days',review.upcoming,t=>taskCard(t,'Due '+format(t.due.start))],['Waiting on someone',review.waiting,t=>taskCard(t,t.notes||'Record who you are waiting on in the personal organizer.')],['Decisions needed',review.decisions,i=>el('p',i.title+' — '+i.reason)]];
     for(const [title,items,render]of sections){const d=group(title+' ('+items.length+')');if(!items.length)d.append(el('p','Nothing recorded in this category.'));let shown=false;d.ontoggle=()=>{if(d.open&&!shown){shown=true;for(const i of items)d.append(render(i));}};weeklyBody.append(d);}
@@ -117,6 +121,7 @@ export function createOrganizer({api,el,say,reload,format,taskLink}){
     state={operations:[],...next,organizer:next.organizer||{revision:0,items:[],history:[]}};revision=state.organizer.revision;busy=state.job?.status==='running';
     form.querySelectorAll('input,select,textarea,button').forEach(n=>n.disabled=busy);captureForm.querySelectorAll('input,textarea,button').forEach(n=>n.disabled=busy);
     const key=JSON.stringify([state.organizer,state.operations,state.latest,state.job?.status]);if(key===listKey)return;listKey=key;
+    const selectedLink=linkedTask.value;linkedTask.replaceChildren();for(const [value,title] of [['','No linked Notion task'],...(state.latest?.tasks||[]).map(t=>[t.id,t.title])]){const o=el('option',title);o.value=value;linkedTask.append(o);}linkedTask.value=selectedLink;
     renderPlanning();renderItems();renderHistory();renderRecovery();areas.replaceChildren();for(const name of [...new Set((state.latest?.tasks||[]).map(t=>t.category).filter(Boolean))]){const option=el('option');option.value=name;areas.append(option);}
   },captureDraft(fields){
     if(busy)return;

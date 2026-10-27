@@ -1,3 +1,4 @@
+import {Updater} from './updater.js';
 import http from 'node:http';
 import {readFile} from 'node:fs/promises';
 import {randomBytes} from 'node:crypto';
@@ -9,7 +10,7 @@ import {Assistant} from './assistant-service.js';
 import {Gmail} from './gmail.js';
 import {RefreshJob} from './refresh-job.js';
 
-export function createApp({token=process.env.NOTION_TOKEN, databaseId=process.env.NOTION_DATABASE_ID, notion=token?new Notion(token):null,store=new Store(),gmail=new Gmail()}={}){
+export function createApp({token=process.env.NOTION_TOKEN, databaseId=process.env.NOTION_DATABASE_ID, notion=token?new Notion(token):null,store=new Store(),gmail=new Gmail(),updater=new Updater({restart:process.env.ASSISTANT_MANAGED==='1'?()=>process.send?.({type:'restart'}):null})}={}){
   const csrf=randomBytes(32).toString('hex'); let snapshot=null; let busy=false;
   const assistant=new Assistant({notion,store,sourceId:databaseId,gmail});
   const job=new RefreshJob(assistant);
@@ -34,11 +35,19 @@ export function createApp({token=process.env.NOTION_TOKEN, databaseId=process.en
         if(req.headers['x-auditor-token']!==csrf)return json(res,403,{error:'Reload the app before continuing.'});
         if(req.headers.origin&&req.headers.origin!==`http://${host}`)return json(res,403,{error:'Origin rejected'});
         const data=await body(req);
+        if(path==='/api/updates/status')return json(res,200,await updater.status());
+        if(updater.busy||updater.restarting)throw Error('The assistant is installing an update. Wait for it to restart.');
+        if(path.startsWith('/api/updates/')){
+          if(busy||job.running||assistant.busy)throw Error('Let the current refresh or edit finish before updating.');
+          if(path==='/api/updates/check')return json(res,200,await updater.check());
+          if(path==='/api/updates/install')return json(res,200,await updater.install(data));
+          if(path==='/api/updates/rollback')return json(res,200,await updater.rollback());
+        }
         if(path==='/api/gmail/status')return json(res,200,await gmail.status());
         if(path==='/api/gmail/connect')return json(res,200,{url:gmail.begin(data.slot,`http://${host}`)});
         if(path==='/api/assistant/state'){
           const currentJob=job.current?{...job.current}:null;
-          return json(res,200,{...await assistant.state(),job:currentJob});
+          return json(res,200,{...await assistant.state(),busy:busy||assistant.busy,job:currentJob});
         }
         if(path==='/api/assistant/organizer'){
           if(busy||job.running)throw Error('Wait until the refresh or update finishes.');
@@ -47,6 +56,12 @@ export function createApp({token=process.env.NOTION_TOKEN, databaseId=process.en
         if(!notion)return json(res,503,{error:'Set NOTION_TOKEN in the server environment, then restart. Never enter a token in chat.'});
         if(path==='/api/assistant/start'){if(busy)throw new Error('A Notion update is running.');return json(res,202,{job:job.start()});}
         if(path==='/api/assistant/stop')return json(res,200,job.stop());
+        if(['/api/assistant/home-recovery-preview','/api/assistant/recover-home'].includes(path)){
+          if(busy||job.running)throw Error('Let Refresh finish before inspecting publication.');
+          if(path.endsWith('/home-recovery-preview'))return json(res,200,await assistant.inspectHomeOperation(data.id,{dryRun:true}));
+          if(data.confirmed!==true)throw Error('Review and confirm the publication inspection first.');
+          await assistant.inspectHomeOperation(data.id,{allowPartial:true});return json(res,200,{inspected:true});
+        }
         if(['/api/assistant/capture','/api/assistant/recovery-preview','/api/assistant/restore'].includes(path)){
           if(busy||job.running)throw Error('Wait until the refresh or update finishes.');
           if(path.endsWith('/capture'))return json(res,200,await assistant.capture(data));
@@ -111,11 +126,16 @@ export function createApp({token=process.env.NOTION_TOKEN, databaseId=process.en
         }
         return json(res,404,{error:'Unknown API route'});
       }
-      const files={'/':'index.html','/app.js':'app.js','/briefing.js':'briefing.js','/planning.js':'planning.js','/organizer-ui.js':'organizer-ui.js','/style.css':'style.css'};
+      const files={'/':'index.html','/app.js':'app.js','/briefing.js':'briefing.js','/planning.js':'planning.js','/task-state.js':'task-state.js','/organizer-ui.js':'organizer-ui.js','/style.css':'style.css'};
       if(req.method!=='GET'||!files[path])return json(res,404,{error:'Not found'});
       const content=await readFile(new URL(`./public/${files[path]}`,import.meta.url));
       res.writeHead(200,{'Content-Type':path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':'text/html','Cache-Control':'no-store'});res.end(content);
     }catch(e){json(res,400,{error:e.message});}
   });
 }
-if(process.argv[1]===fileURLToPath(import.meta.url))createApp().listen(Number(process.env.PORT)||3000,'127.0.0.1',()=>console.log('Personal Task Auditor running on local port '+(process.env.PORT||3000)));
+if(process.argv[1]===fileURLToPath(import.meta.url)){
+ const server=createApp();server.listen(Number(process.env.PORT)||3000,'127.0.0.1',async()=>{
+   try{await new Store().read();await new Gmail().status();console.log('Personal Assistant running on local port '+(process.env.PORT||3000));process.send?.({type:'ready'});}catch{console.error('Saved records could not be opened. Startup stopped without changing them.');server.close(()=>process.exit(1));}
+ });
+ process.on('message',m=>{if(m?.type==='shutdown'){server.close(()=>process.exit(0));setTimeout(()=>process.exit(0),4000).unref();}});
+}

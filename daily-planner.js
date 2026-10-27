@@ -1,3 +1,4 @@
+import {rankedActions} from './public/task-state.js';
 import {rich} from './notion.js';
 import {isActive} from './assistant.js';
 import {localParts} from './audit.js';
@@ -20,7 +21,7 @@ export function planDailyPlanner(dated,report){
   const active=report.tasks.filter(t=>isActive(t)&&!held.has(t.id));
   const rank={ASAP:0,High:1,Normal:2,Low:3};
   const ordered=[...active].sort((a,b)=>(rank[a.priority]??2)-(rank[b.priority]??2)||(a.due?.start||'9999').localeCompare(b.due?.start||'9999')||a.title.localeCompare(b.title));
-  const next=ordered.filter(t=>t.kind!=='Fixed commitment'&&t.status!=='Waiting'&&t.basis!=='Needs confirmation'&&(!t.doDate?.start||day(t.doDate.start)<=today)).slice(0,3);
+  const next=rankedActions(report,today).slice(0,3);
   const reason=t=>t.due?.start?'Deadline '+date(t.due.start):t.priority==='ASAP'||t.priority==='High'?'High priority in your task records':'Open work · no deadline recorded';
   const nextText=next.length?next.map((t,i)=>`${i+1}. ${short(t.title)}\n${reason(t)}`).join('\n\n'):'No next action is confirmed in your current task records.';
   const commitments=active.flatMap(t=>(t.schedules||[]).filter(s=>s.start?.includes('T')&&day(s.start)===today&&Date.parse(s.end||s.start)>+now).map(s=>({t,s}))).sort((a,b)=>Date.parse(a.s.start)-Date.parse(b.s.start));

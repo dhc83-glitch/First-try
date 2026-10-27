@@ -1,3 +1,4 @@
+import {rankedActions} from './public/task-state.js';
 import {rich} from './notion.js';
 import {isActive} from './assistant.js';
 import {localParts} from './audit.js';
@@ -37,7 +38,7 @@ export function planHomeContent(blocks,report){
   const active=report.tasks.filter(t=>isActive(t)&&!held.has(t.id));
   const priority={ASAP:0,High:1,Normal:2,Low:3};
   const rank=(a,b)=>(priority[a.priority]??2)-(priority[b.priority]??2)||(a.due?.start||'9999').localeCompare(b.due?.start||'9999')||a.title.localeCompare(b.title);
-  const eligible=active.filter(t=>t.kind!=='Fixed commitment'&&t.status!=='Waiting'&&t.basis!=='Needs confirmation'&&(!t.doDate?.start||dayOf(t.doDate.start)<=today)).sort(rank);
+  const eligible=rankedActions(report,today);
   const timed=active.flatMap(t=>(t.schedules||[]).map(s=>({task:t,start:s.start,end:s.end||s.start}))).filter(s=>s.start?.includes('T')&&dayOf(s.start)===today&&Date.parse(s.end)>+now).sort((a,b)=>Date.parse(a.start)-Date.parse(b.start));
   const upcoming=active.filter(t=>[t.due?.start,t.doDate?.start,...(t.schedules||[]).map(s=>s.start)].some(d=>d&&dayOf(d)>=today&&dayOf(d)<=dayOf(new Date(+now+7*86400000).toISOString()))).sort(rank);
   const followups=active.filter(t=>/^(reply|confirm|review|check|follow[ -]?up|wait|await)\b/i.test(t.title)||t.status==='Waiting').sort(rank);
@@ -57,14 +58,14 @@ export function planHomeContent(blocks,report){
     changes.push({id:b.id,type:b.type,field:'rich_text',lastEdited:b.last_edited_time,before:homeValue(b),after,section});coverage.push(section);
   };
   const cells=(b,texts,section)=>{const after=texts.map(homeRich);if(homeValueEqual(b.table_row.cells,after,'cells'))return;changes.push({id:b.id,type:b.type,field:'cells',lastEdited:b.last_edited_time,before:b.table_row.cells,after,section});coverage.push(section);};
-  const monday=new Date(today+'T12:00:00Z');monday.setUTCDate(monday.getUTCDate()-((monday.getUTCDay()+6)%7));
+  const monday=new Date(today+'T12:00:00Z'); // rolling seven days, not a retained past week
   const weekDays=Array.from({length:7},(_,i)=>{const d=new Date(+monday+i*86400000);return d.toISOString().slice(0,10);});
   const dayLabel=d=>new Intl.DateTimeFormat('en-US',{timeZone:zone,weekday:'short',month:'short',day:'numeric'}).format(new Date(d+'T12:00:00Z'));
-  const forDay=(tasks,d)=>tasks.filter(t=>[t.doDate?.start,t.due?.start,...(t.schedules||[]).map(s=>s.start)].some(value=>dayOf(value)===d));
+  const forDay=(tasks,d)=>tasks.filter(t=>[t.doDate?.start,t.due?.start,t.scheduled?.start,...(t.schedules||[]).map(s=>s.start)].some(value=>dayOf(value)===d));
   function walk(rows,context={}){
     let section=context.section||'';
     for(const b of rows){
-      const text=homeText(b),name=key(text);if(isArchive(b)||['child_page','child_database','synced_block'].includes(b.type))continue;
+      const text=homeText(b),name=key(text);if(isArchive(b)||/previous sports listings|sports history/i.test(homeText(b))||['child_page','child_database','synced_block'].includes(b.type))continue;
       if(b.type.startsWith('heading_'))section=name;
       const ctx={...context,section};
       if(b.type==='callout'&&/^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b/i.test(text)&&!context.section&&!summaryFound&&!/execution order/i.test(text)){
@@ -77,8 +78,14 @@ export function planHomeContent(blocks,report){
       if(b.type==='callout'&&/^(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|today).*execution order$/.test(name)){
         change(b,weekday+' execution order','Execution heading');for(const c of b.children||[])if(c.type==='paragraph')change(c,execution,'Execution plan');
       }
+      if(report.sports&&context.toggle?.includes('sports')&&b.type.startsWith('heading_'))change(b,'🏟️ Upcoming sports · '+report.sports.status,'Sports');
+      if(report.sports&&context.toggle?.includes('sports')&&b.type==='paragraph'&&/^(Verification status:|This section was refreshed|Checked against)/.test(text))change(b,'Sports source: ESPN · '+report.sports.status+' · checked '+stamp(report.sports.checkedAt)+'. '+report.sports.failures.join(' ')+' Only future verified fixtures are shown.','Sports');
       if(b.type==='table'&&b.children?.[0]?.type==='table_row'){
         const header=b.children[0].table_row.cells.map(rich).join(' | ');
+        if(report.sports&&context.toggle?.includes('sports')&&/^When.*\| Matchup \|/.test(header)){
+          b.children.slice(1).forEach((row,i)=>{const event=report.sports.events[i];cells(row,event?[event.tbd?'Time to be confirmed':stamp(event.start),event.title,event.league]:['—',report.sports.status==='checked'?'No additional upcoming fixture':'Schedule unavailable for this slot','—'],'Sports');});
+          if(report.sports.events.length>b.children.length-1)warnings.push('Additional sports fixtures are listed on the local Refresh page.');
+        }
         if(/^Day \| (Confirmed schedule \| Preparation & reminders|Recorded commitments \/ history \| Open work \/ actual deadlines)$/.test(header)&&b.children.length===8){
           cells(b.children[0],['Day','Recorded commitments / history','Open work / actual deadlines'],'Weekly schedule');
           for(let i=0;i<7;i++){
@@ -113,11 +120,11 @@ export function planHomeContent(blocks,report){
         if(/^Subscription reviews|^Known renewal/.test(text))change(b,'Known renewal dates remain in the task records; your explicit cancellation updates take priority over older review reminders. Automatic provider verification and general 7-day/1-day reminder generation are not implemented.','Refresh description');
         if(/^Date filters|^This app runs/.test(text))change(b,'This app runs when you click Refresh while its local server is running. It does not configure or verify a separate 6:45 AM ChatGPT routine. Sports, weather, newsletters, and subscription provider records require their own current sources; this app has not freshly verified them.','Refresh description');
       }
-      if(b.type==='toggle'&&/sports this week|sports saved listings/.test(name)){
+      if(b.type==='toggle'&&/sports this week|sports saved listings/.test(name)&&!report.sports){
         change(b,'🏟️ Sports · saved listings','Sports coverage');warnings.push('Sports listings are preserved as an older snapshot; fresh fixtures are not connected.');
       }
-      if(context.toggle?.includes('sports')&&b.type.startsWith('heading_')&&/important sports matchups|saved sports listings/.test(name))change(b,'🏟️ Saved sports listings · not freshly verified','Sports coverage');
-      if(context.toggle?.includes('sports')&&b.type==='paragraph'&&/^Checked Friday|^Verification status:/.test(text))change(b,'Verification status: these are saved listings from an earlier refresh. Past matchups remain historical. Current times, results, and new fixtures have not been checked.','Sports coverage');
+      if(!report.sports&&context.toggle?.includes('sports')&&b.type.startsWith('heading_')&&/important sports matchups|saved sports listings/.test(name))change(b,'🏟️ Saved sports listings · not freshly verified','Sports coverage');
+      if(!report.sports&&context.toggle?.includes('sports')&&b.type==='paragraph'&&/^Checked Friday|^Verification status:/.test(text))change(b,'Verification status: these are saved listings from an earlier refresh. Past matchups remain historical. Current times, results, and new fixtures have not been checked.','Sports coverage');
       if(context.newsletters&&b.type==='paragraph'&&/ · (?:Oct|Nov|Dec|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep)\b|^Saved newsletter snapshot:/i.test(text)){
         const original=text.replace(/^Saved newsletter snapshot: /,'');
         const label=key(original.split(' · ')[0]);

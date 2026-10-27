@@ -57,3 +57,8 @@ Never promise “without fault.” Make failures visible, keep reliable state, t
 ## Daily planner layout update
 
 Refresh can now install and maintain a compact briefing in the dated Home callout: next three actionable tasks, today’s commitments and deadlines, and toggles for actual weekly deadlines, waiting work, decisions, and source details. Existing detailed sections and historical layouts are preserved. The installer records intent, verifies created blocks, reuses them on repeat refresh, and blocks uncertain installs rather than creating duplicates. This redesign is fixture-tested; Mac installation and visual verification remain pending. It does not add general email interpretation or new source integrations.
+
+
+## Refresh integration and updater repair
+
+Implemented shared action selectors, Home corrections before planning and verified reconciliation, one-run comparisons across internal reads/inbox batches, source timestamps, local organizer planning and optional task-ID completion links, a sports fixture adapter, freshness markers written last, and explicit interrupted-publication inspection. Added a supervised updater with staged hashed downloads, backups, restart, automatic startup rollback and an optional manual rollback. A one-time Mac double-click bootstrap installer enables future browser updates; no typed Terminal commands are needed for that flow. These changes do not complete general email interpretation, external-calendar integration or provider verification. See README for installation, trust and coverage boundaries. Mac installation is not remotely verified.

@@ -40,6 +40,10 @@ function renderAssistant(report){
   if(!report.tasks)return;
   root.append(el('p','Checked '+format(report.finishedAt)+'.'));
   if(report.automatic){const a=report.automatic;const n=a.closedReminders+a.appliedUpdates+a.scheduled+a.dailyGoalUpdates+(a.emailCompletions||0)+(a.renamedTasks||0);$('automaticCount').textContent=n;root.append(el('h3','Automatic update results'),el('p',`${n} verified task updates · Home sections ${a.homeUpdated?'verified':'not updated'}`));for(const c of a.correspondence||[])root.append(el('p',c.slot+' reply/confirmation check: '+c.status+(c.threadsRead!==undefined?' · '+c.threadsRead+' conversations':'')));if(a.emailCompletions)root.append(el('p',a.emailCompletions+' reply/confirmation tasks completed from sent mail and direct acknowledgement evidence.'));if(a.homeSections?.length)root.append(el('p','Home sections: '+a.homeSections.join(', ')));for(const warning of a.homeWarnings||[])root.append(el('p',warning,'source-pending'));for(const e of a.exceptions)root.append(el('p',(e.title?e.title+' — ':'')+e.reason,'source-pending'));}
+  if(report.sports){root.append(el('h3','Sports · '+report.sports.status));for(const e of report.sports.events||[])root.append(el('p',format(e.start)+' · '+e.title));for(const f of report.sports.failures||[])root.append(el('p',f,'source-pending'));}
+  if(report.corrections?.error)root.append(el('p',report.corrections.error,'source-pending'));
+  if(report.publication?.status==='partial')root.append(el('p','Notion Home was only partially updated. Its date does not verify every section. See change history.','source-pending'));
+  root.append(el('p','Coverage: task records, saved corrections, linked organizer items and configured sports. General email interpretation, external calendars, grocery databases and subscription-provider verification remain incomplete.','hint'));
   for(const warning of report.warnings||[])root.append(el('p',warning,'source-pending'));
   if(report.needsRefresh){root.append(el('p','A change was submitted. Refresh before reviewing more suggestions.','source-pending'));return;}
   const changes=report.changes;
@@ -93,7 +97,7 @@ $('planForm').onsubmit=async e=>{e.preventDefault();const button=e.submitter;but
 $('mailCancel').onclick=()=>$('mailDialog').close();
 $('mailForm').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{const r=await api('assistant/mail-review',{key:selectedMail.key,decision:'create',confirmed:true,title:$('mailTitle').value,due:$('mailDue').value});$('mailDialog').close();await loadAssistant();say(r.alreadyLinked?'That email already has a task. No duplicate was created.':'Your approved task was created and verified. Refresh to include it in the plan.');}catch(err){$('mailError').textContent=err.message;}finally{b.disabled=false;}};
 async function loadGmail(){const status=await api('gmail/status');$('gmailSetup').textContent=status.configured?'Choose Connect Gmail for each account. Google will ask you to sign in and grant read-only access.':'One-time Google app setup is still required. See “Gmail setup” in README.md. Your ChatGPT Gmail connections cannot be reused by this app.';$('gmailAccounts').replaceChildren();for(const a of status.accounts){const row=el('div',undefined,'row');row.append(el('p',`${a.slot}: ${a.email||'not connected'}`));const b=el('button',a.connected?'Reconnect Gmail':'Connect Gmail');b.disabled=!status.configured;b.onclick=async()=>{b.disabled=true;try{const r=await api('gmail/connect',{slot:a.slot});location.assign(r.url);}catch(e){say(e.message,true);b.disabled=false;}};row.append(b);$('gmailAccounts').append(row);}}
-fetch('/api/config').then(r=>r.json()).then(async c=>{config=c;$('database').value=c.databaseId;$('assistantRefresh').disabled=!c.connected;say(c.connected?'Notion key is available. Click Refresh my assistant to check Central Tasks.':'Notion is not connected yet. Add NOTION_TOKEN to the server environment or local .env file and restart.');const results=await Promise.allSettled([loadAssistant(),loadGmail()]);for(const result of results)if(result.status==='rejected')say(result.reason.message,true);}).catch(e=>say('Could not load the local assistant: '+e.message,true));
+fetch('/api/config').then(r=>r.json()).then(async c=>{config=c;$('database').value=c.databaseId;$('assistantRefresh').disabled=!c.connected;say(c.connected?'Notion key is available. Click Refresh my assistant to check Central Tasks.':'Notion is not connected yet. Add NOTION_TOKEN to the server environment or local .env file and restart.');const results=await Promise.allSettled([loadAssistant(),loadGmail(),loadUpdater()]);for(const result of results)if(result.status==='rejected')say(result.reason.message,true);}).catch(e=>say('Could not load the local assistant: '+e.message,true));
 
 $('updateForm').onsubmit=async e=>{e.preventDefault();$('saveUpdate').disabled=true;try{await api('assistant/update',{text:$('updateText').value});$('updateText').value='';await loadAssistant();say('Information saved. Click Refresh to apply it.');}catch(error){say(error.message,true);}finally{$('saveUpdate').disabled=jobRunning;}};
 
@@ -154,3 +158,16 @@ function restoreUI(saved){
 }
 document.addEventListener('toggle',e=>{if(e.target.tagName==='DETAILS'&&e.target.closest('main')){uiPrefs.details={...uiPrefs.details,[detailKey(e.target)]:e.target.open};storePrefs();}},true);
 restoreUI();
+
+let updateCandidate;
+async function loadUpdater(){const u=await api('updates/status');updateCandidate=u.candidate;$('updateStatus').textContent=u.managed?(u.detail||'Updates can be installed here. Your saved data and connections are preserved.'):'The one-time launcher installation is needed to enable updates from this page.';$('rollbackAppUpdate').hidden=!u.canRollback;$('installAppUpdate').hidden=!u.candidate||!u.managed;}
+run('checkAppUpdate',async()=>{const u=await api('updates/check');updateCandidate=u.candidate;$('updateStatus').textContent=u.available?'Version '+u.candidate.version+' is available. Finish any refresh before installing.':'You have the current release.';$('installAppUpdate').hidden=!u.available||!u.managed;});
+async function reconnectAfterUpdate(){
+ $('updateStatus').textContent='Restarting the assistant. This page will reconnect automatically…';
+ for(let attempt=0;attempt<40;attempt++){
+  await new Promise(r=>setTimeout(r,1500));try{const c=await fetch('/api/config',{cache:'no-store'}).then(r=>{if(!r.ok)throw Error();return r.json();});if(c.csrf!==config.csrf){location.reload();return;}}catch{}
+ }
+ $('updateStatus').textContent='The assistant has not reconnected. Your saved data is preserved. Check the open app window for the startup message.';
+}
+run('installAppUpdate',async()=>{if(jobRunning)throw Error('Let Refresh finish before updating.');const result=await api('updates/install',{sha:updateCandidate.sha});if(result.restart)await reconnectAfterUpdate();else await loadUpdater();});
+run('rollbackAppUpdate',async()=>{if(jobRunning)throw Error('Let Refresh finish before restoring.');if(!confirm('Restore the previous app code and restart? Your saved records and connections will be kept.'))return;await api('updates/rollback');await reconnectAfterUpdate();});

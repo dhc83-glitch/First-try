@@ -171,3 +171,22 @@ These tests validate the local workflow against mock API responses. They do **no
 
 Cloud setup saves reusable startup instructions separately from the running process. Review/save the environment draft and publish through environment settings when you want to reuse the prepared environment. Publishing and a fresh-task restore are separate from current-instance validation.
 
+
+
+## Unified Refresh and browser updates (1.1)
+
+Refresh now retains one run ID and original comparison baseline across inbox batches and internal task rereads. Source timestamps distinguish fresh task reads from saved inbox coverage. Saved Home corrections are read before planning and unique explicit completion/cancellation facts are applied through the verified Notion write path. Ambiguous matches are exceptions. Browser and Home priorities share action eligibility and ordering; the browser additionally limits suggestions to its recorded time budget. Nothing infers task completion from an old planning date.
+
+Local organizer reminders participate in priority selection. Optionally link an organizer item to a Central Tasks record; completing it queues a task-ID completion for the next Refresh. Restoring that local completion before Refresh supersedes the queued change. Unlinked local reminders remain local. General email interpretation, external-calendar synchronization, and provider-level subscription verification are still incomplete; coverage limits remain visible.
+
+Sports Refresh reads public ESPN fixtures for the supported official team/league links already present on Home. It fetches daily schedules, filters future fixtures, handles Eastern dates, and shows a partial status when a provider fails. Current sources include NBA, NHL, NFL, La Liga, MLB postseason and ranked college-football games when their corresponding links exist. Empty or failed sources are not replaced by invented events. Additional fixtures appear on the local page when Home has fewer table slots. A successful public-provider connectivity check is not a guarantee of future provider availability.
+
+Home content is verified before its overall date/summary markers are published. This is not an atomic Notion transaction; an interrupted publish is explicitly marked partial. Old uncertain writes are not blindly replayed. The change inspector can read back known before/after states and, with explicit confirmation, retire an interrupted generation so the next Refresh prepares a fresh plan. Independently changed sections remain blocked for inspection.
+
+### One-time Mac installation without pasted Terminal commands
+
+Download the published update ZIP, extract it, and open **Install Assistant.command**. Select the existing app folder containing your saved settings, not the downloaded update folder. Finish Refresh first. The installer validates JavaScript, verifies that any process it stops belongs to that selected app, backs up the code, preserves `.env` and `.local`, and launches the supervised app. The command opens a window but requires no commands to be typed. macOS may require right-click → Open for a downloaded script. The installer expects the default local port 3000 and Node.js 24.5 or later.
+
+After that installation, **Assistant updates → Check for updates → Install update & restart** installs a published, version-pinned release from this repository. The release manifest lists SHA-256 hashes. All files are staged and syntax-checked before existing code is replaced. Private paths, traversal, duplicate files, oversized payloads, and hash mismatches are rejected. Saved records and OAuth files are outside the code update. The launcher restarts the server, verifies startup, and automatically restores previous code if the new server fails to start. **Restore previous version** is also available after a successful update. Installation is blocked during Refresh or editing; updates are never started merely by opening the page.
+
+This updater trusts the repository's release branch over HTTPS; it is not an independently signed software-distribution system. The updater does not make arbitrary server-side code safe. Only tested releases should be published. Rollback restores code, not personal data edits made after the update. The first Mac installation and Finder behavior still require verification on the user's Mac; automated tests cover mocked updates and actual child-process startup failure/rollback in the development environment.
